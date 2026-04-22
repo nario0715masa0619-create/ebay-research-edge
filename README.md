@@ -63,7 +63,9 @@ eBay-Research-Edge/
 │   ├── scoring-rules.md
 │   ├── sample-output.md
 │   ├── open-questions.md
-│   └── genspark-implementation-prompt.md
+│   ├── genspark-implementation-prompt.md
+│   ├── function-specification.md
+│   └── development-guidelines.md
 ├── tests/                   # テスト
 ├── main.py                  # メインエントリーポイント
 ├── pyproject.toml           # プロジェクト設定
@@ -172,6 +174,8 @@ python main.py
 - [スコアリングルール](./docs/scoring-rules.md)
 - [出力サンプル](./docs/sample-output.md)
 - [未解決質問](./docs/open-questions.md)
+- **[関数仕様書](./docs/function-specification.md)** ← 開発時の参照
+- **[開発ガイドライン](./docs/development-guidelines.md)** ← コード作成時のルール
 
 ## スコアリングロジック（初期案）
 
@@ -183,6 +187,23 @@ candidate_score = 0.4 * demand_score + 0.4 * profit_score + 0.2 * supply_score
 - **80点以上**: list_candidate（LIST推奨）
 - **60〜79点**: hold（保留・後で検討）
 - **59点以下**: skip（見送り）
+
+## 開発ルール
+
+### 📋 コード変更・新規作成時のルール
+
+**重要**: 新しい関数を作成したり、既存関数を変更する場合は、必ず以下の手順に従ってください。
+
+#### Step 1: 関数仕様書を先に書く
+\docs/function-specification.md\ に関数の仕様を記載します。
+
+#### Step 2: コードに docstring を追加
+ソースコードに英語で詳細な docstring を書きます。
+
+#### Step 3: 仕様と実装を同期させる
+変更があれば、両方を更新します。
+
+詳細は [開発ガイドライン](./docs/development-guidelines.md) を参照してください。
 
 ## 設計原則
 
