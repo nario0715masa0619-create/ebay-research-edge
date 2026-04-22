@@ -67,6 +67,11 @@ eBay-Research-Edge/
 │   ├── function-specification.md
 │   └── development-guidelines.md
 ├── tests/                   # テスト
+│   ├── sample_data_generator.py
+│   ├── test_sample_data.py
+│   ├── test_scoring_logic.py
+│   ├── test_phase1_integration.py
+│   └── generate_sample_data.py
 ├── main.py                  # メインエントリーポイント
 ├── pyproject.toml           # プロジェクト設定
 ├── requirements.txt         # 依存パッケージ
@@ -109,19 +114,26 @@ eBay-Research-Edge/
 
 ## 開発フェーズ
 
-### Phase 1: eBay Sold MVP
-- eBay Sold データ取得
-- 基本集計（sold_30d, sold_90d）
-- CSV出力
-- **状態**: 実装中
+### ✅ Phase 1: eBay Sold MVP - **完了**
+- ✅ eBay Sold データ取得スケルトン
+- ✅ 基本集計（sold_30d, sold_90d）
+- ✅ CSV出力
+- ✅ スコアリングロジック実装（demand, profit, supply）
+- ✅ サンプルデータ生成（55レコード）
+- ✅ 統合テスト（正規化 → メトリクス計算 → スコアリング → CSV出力）
 
-### Phase 2: 国内価格比較
+**Phase 1 の成果:**
+- サンプルデータから最終的なCSV出力までの完全なパイプラインが動作確認済み
+- 3つのポケモンカード商品について、スコア計算（score=76.0, status=hold）が正常に実行される
+- すべての単体テスト＋統合テスト合格
+
+### Phase 2: 国内価格比較 - **予定**
 - 国内1サイト対応（メルカリ）
 - 国内外価格差・粗利率算出
-- candidate_score 実装
-- decision_status 判定
+- candidate_score 実装（✅完了）
+- decision_status 判定（✅完了）
 
-### Phase 3: ダッシュボード化
+### Phase 3: ダッシュボード化 - **予定**
 - 検索UI
 - サマリーカード
 - 候補一覧テーブル
@@ -155,13 +167,18 @@ cp .env.example .env
 
 ## 使用方法
 
-### Phase 1 MVP (eBay Sold 取得)
+### Phase 1 MVP (サンプルデータでの動作確認)
 
 \\\ash
-python main.py
-\\\
+# サンプルデータ生成
+python tests/generate_sample_data.py
 
-現在は基本的な構造が整備されています。Phase 1 の実装を進めています。
+# 統合テスト実行（正規化 → メトリクス → スコアリング → CSV出力）
+python tests/test_phase1_integration.py
+
+# 結果確認
+cat data/processed/test_phase1_candidates.csv
+\\\
 
 ## ドキュメント
 
@@ -177,7 +194,7 @@ python main.py
 - **[関数仕様書](./docs/function-specification.md)** ← 開発時の参照
 - **[開発ガイドライン](./docs/development-guidelines.md)** ← コード作成時のルール
 
-## スコアリングロジック（初期案）
+## スコアリングロジック
 
 \\\
 candidate_score = 0.4 * demand_score + 0.4 * profit_score + 0.2 * supply_score
@@ -187,6 +204,20 @@ candidate_score = 0.4 * demand_score + 0.4 * profit_score + 0.2 * supply_score
 - **80点以上**: list_candidate（LIST推奨）
 - **60〜79点**: hold（保留・後で検討）
 - **59点以下**: skip（見送り）
+
+### スコア計算詳細
+
+**demand_score（需要評価）:**
+- sold_30d: 0-1件(0) → 2-3件(20) → 4-5件(40) → 6-7件(60) → 8件以上(100)
+- STR bonus: <20%(0) → 20-40%(+10) → 40-60%(+20) → >60%(+30)
+- 90日一貫性bonus: sold_90d > sold_30d * 2.5 なら +10
+
+**profit_score（利益評価）:**
+- profit_rate: <5%(0) → 5-10%(30) → 10-15%(50) → 15-20%(70) → 20%以上(100)
+- amount_bonus: <500JPY(0) → 500-1000(+10) → 1000-2000(+20) → 2000以上(+30)
+
+**supply_score（供給・競争評価）:**
+- active_count: >50(0) → 30-50(20) → 15-30(40) → 5-15(60) → <5(100)
 
 ## 開発ルール
 
@@ -213,14 +244,26 @@ candidate_score = 0.4 * demand_score + 0.4 * profit_score + 0.2 * supply_score
 - 小さく作って実運用しながら改善する
 - **カテゴリを動的に切り替え可能にする**
 
+## テスト実行
+
+\\\ash
+# サンプルデータ生成テスト
+python tests/test_sample_data.py
+
+# スコアリングロジックテスト
+python tests/test_scoring_logic.py
+
+# 統合テスト（完全パイプライン）
+python tests/test_phase1_integration.py
+\\\
+
 ## 今後のロードマップ
 
-1. eBay Sold データ取得の実装
-2. メルカリ価格取得の実装
-3. スコアリング・判定ロジックの完成
-4. Streamlit ダッシュボードの構築
-5. 複数カテゴリ対応への拡張
+1. ✅ Phase 1: サンプルデータ + スコアリング（完了）
+2. Phase 2: eBay API 実装 + メルカリ取得実装
+3. Phase 3: Streamlit ダッシュボード構築
+4. Phase 4: 複数カテゴリ対応への拡張
 
-## ドキュメント
+---
 
-※ 現時点では設計・実装初期段階です。実装の進捗に応じて README と docs を随時アップデートしていきます。
+**最終更新**: 2026-04-22 | **Status**: Phase 1完了、Phase 2準備中
