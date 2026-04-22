@@ -220,18 +220,60 @@ class Analyzer:
         Returns:
             float: Demand score (0-100).
         
-        Notes:
-            - TODO: Implement detailed scoring logic with category-specific thresholds
-            - Higher sold counts should yield higher scores
-            - Higher STR should yield higher scores
+        Scoring Logic:
+        1. Base score from sold_30d:
+           - 0-1: 0 points
+           - 2-3: 20 points
+           - 4-5: 40 points
+           - 6-7: 60 points
+           - 8+: 100 points
         
-        Placeholder:
-            Currently returns 0.0 (needs implementation).
+        2. STR bonus:
+           - < 20%: 0 bonus
+           - 20-40%: +10 points
+           - 40-60%: +20 points
+           - > 60%: +30 points
+        
+        3. Consistency bonus (90-day check):
+           - If sold_90d > sold_30d * 2.5: +10 points
+           - (indicates sustained strong demand)
+        
+        4. Final: min(100, base + str_bonus + consistency_bonus)
+        
+        Example:
+            >>> score = analyzer.calculate_demand_score(5, 15, 45.0)
+            >>> print(score)  # ~70 (40 base + 20 STR + 10 consistency)
         """
-        # TODO: Implement demand score calculation
-        # Consider: sold_30d trend, sold_90d base, STR strength
-        score = 0.0
-        return score
+        # Base score from sold_30d
+        if sold_30d >= 8:
+            base_score = 100.0
+        elif sold_30d >= 6:
+            base_score = 60.0
+        elif sold_30d >= 4:
+            base_score = 40.0
+        elif sold_30d >= 2:
+            base_score = 20.0
+        else:
+            base_score = 0.0
+        
+        # STR bonus
+        if str_value > 60:
+            str_bonus = 30.0
+        elif str_value > 40:
+            str_bonus = 20.0
+        elif str_value > 20:
+            str_bonus = 10.0
+        else:
+            str_bonus = 0.0
+        
+        # Consistency bonus: check if 90-day sales are sustained
+        consistency_bonus = 0.0
+        if sold_30d > 0 and sold_90d > sold_30d * 2.5:
+            consistency_bonus = 10.0
+        
+        # Cap at 100
+        demand_score = min(100.0, base_score + str_bonus + consistency_bonus)
+        return round(demand_score, 2)
     
     def calculate_profit_score(self, profit_rate: float, profit_jpy: float) -> float:
         """
@@ -246,19 +288,51 @@ class Analyzer:
         Returns:
             float: Profit score (0-100).
         
-        Notes:
-            - TODO: Implement detailed scoring logic
-            - Higher profit rate should yield higher scores
-            - Higher profit amount should yield higher scores
-            - Consider minimum thresholds (e.g., must be > 5% to score points)
+        Scoring Logic:
+        1. Base score from profit_rate:
+           - < 5%: 0 points
+           - 5-10%: 30 points
+           - 10-15%: 50 points
+           - 15-20%: 70 points
+           - 20%+: 100 points
         
-        Placeholder:
-            Currently returns 0.0 (needs implementation).
+        2. Amount bonus:
+           - < 500 JPY: 0 bonus
+           - 500-1000 JPY: +10 points
+           - 1000-2000 JPY: +20 points
+           - 2000+ JPY: +30 points
+        
+        3. Final: min(100, base + amount_bonus)
+        
+        Example:
+            >>> score = analyzer.calculate_profit_score(18.0, 1500.0)
+            >>> print(score)  # ~90 (70 base + 20 amount bonus)
         """
-        # TODO: Implement profit score calculation
-        # Consider: minimum profit rate threshold, profit amount scaling
-        score = 0.0
-        return score
+        # Base score from profit_rate
+        if profit_rate >= 20:
+            rate_score = 100.0
+        elif profit_rate >= 15:
+            rate_score = 70.0
+        elif profit_rate >= 10:
+            rate_score = 50.0
+        elif profit_rate >= 5:
+            rate_score = 30.0
+        else:
+            rate_score = 0.0
+        
+        # Amount bonus
+        if profit_jpy >= 2000:
+            amount_bonus = 30.0
+        elif profit_jpy >= 1000:
+            amount_bonus = 20.0
+        elif profit_jpy >= 500:
+            amount_bonus = 10.0
+        else:
+            amount_bonus = 0.0
+        
+        # Cap at 100
+        profit_score = min(100.0, rate_score + amount_bonus)
+        return round(profit_score, 2)
     
     def calculate_supply_score(self, active_count: int) -> float:
         """
@@ -273,18 +347,30 @@ class Analyzer:
         Returns:
             float: Supply score (0-100).
         
-        Notes:
-            - TODO: Implement category-specific thresholds
-            - Lower active_count should yield higher scores
-            - Possibly use exponential decay or tiered thresholds
+        Scoring Logic:
+        Active count tiers:
+        - > 50: 0 points (highly competitive)
+        - 30-50: 20 points
+        - 15-30: 40 points
+        - 5-15: 60 points
+        - < 5: 100 points (low competition)
         
-        Placeholder:
-            Currently returns 0.0 (needs implementation).
+        Example:
+            >>> score = analyzer.calculate_supply_score(8)
+            >>> print(score)  # 60 (5-15 range)
         """
-        # TODO: Implement supply score calculation
-        # Consider: active_count thresholds, category-specific benchmarks
-        score = 0.0
-        return score
+        if active_count < 5:
+            supply_score = 100.0
+        elif active_count < 15:
+            supply_score = 60.0
+        elif active_count < 30:
+            supply_score = 40.0
+        elif active_count < 50:
+            supply_score = 20.0
+        else:
+            supply_score = 0.0
+        
+        return supply_score
     
     def calculate_candidate_score(self, demand_score: float, profit_score: float, supply_score: float) -> float:
         """
@@ -314,11 +400,12 @@ class Analyzer:
             >>> score = analyzer.calculate_candidate_score(85.0, 75.0, 80.0)
             >>> print(score)  # 80.0
         """
-        weights = self.scoring_config['weights'] if 'weights' in self.scoring_config else {
+        weights = self.scoring_config.get('weights', {
             'demand': 0.4,
             'profit': 0.4,
             'supply': 0.2
-        }
+        })
+        
         total_score = (weights['demand'] * demand_score + 
                       weights['profit'] * profit_score + 
                       weights['supply'] * supply_score)

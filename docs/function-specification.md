@@ -513,3 +513,75 @@ ormalize_records(records: List[MarketRecord])\
 - [ ] 統合テストの作成
 - [ ] ドキュメンテーション文字列（docstring）の充実
 - [ ] エラーログとログレベルの最適化
+## Scoring Implementation Details
+
+### Demand Score Calculation
+
+The demand_score evaluates market demand based on sales velocity and sell-through rate.
+
+**Scoring Tiers (30-day sold count):**
+- 0-1 sold: 0 points
+- 2-3 sold: 20 points
+- 4-5 sold: 40 points
+- 6-7 sold: 60 points
+- 8+ sold: 100 points
+
+**STR Bonus:**
+- STR < 20%: 0 bonus
+- STR 20-40%: +10 points
+- STR 40-60%: +20 points
+- STR > 60%: +30 points
+
+**90-day consideration:**
+- If sold_90d significantly higher than sold_30d * 3: +10 bonus
+- (Indicates sustained demand)
+
+**Formula:**
+\\\
+base_score = tier_points(sold_30d)
+str_bonus = calculate_str_bonus(str)
+consistency_bonus = check_90d_consistency(sold_30d, sold_90d)
+demand_score = min(100, base_score + str_bonus + consistency_bonus)
+\\\
+
+### Profit Score Calculation
+
+The profit_score evaluates profitability based on rate and absolute amount.
+
+**Profit Rate Tiers:**
+- < 5%: 0 points
+- 5-10%: 30 points
+- 10-15%: 50 points
+- 15-20%: 70 points
+- > 20%: 100 points
+
+**Profit Amount Bonus (in JPY):**
+- < 500: 0 bonus
+- 500-1000: +10 points
+- 1000-2000: +20 points
+- > 2000: +30 points
+
+**Formula:**
+\\\
+rate_score = tier_points(profit_rate)
+amount_bonus = calculate_amount_bonus(profit_jpy)
+profit_score = min(100, rate_score + amount_bonus)
+\\\
+
+### Supply Score Calculation
+
+The supply_score evaluates competitive intensity based on active listings.
+
+**Active Count Tiers:**
+- > 50: 0 points
+- 30-50: 20 points
+- 15-30: 40 points
+- 5-15: 60 points
+- < 5: 100 points
+
+**Formula:**
+\\\
+supply_score = tier_points(active_count)
+\\\
+
+Lower supply (fewer competitors) = higher score = more favorable.
