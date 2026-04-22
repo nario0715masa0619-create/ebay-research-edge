@@ -28,13 +28,15 @@ mercari:
 
 normalization:
   title_patterns:
-    - pattern: "japanese|jp|日本語"
+    - pattern: "\\[.*?\\]"
       replacement: ""
     - pattern: "\\(.*?\\)"
       replacement: ""
+    - pattern: "japanese|jp|日本語"
+      replacement: ""
     - pattern: "\\s+"
       replacement: " "
-  
+
 currency:
   ebay: "USD"
   mercari: "JPY"
@@ -45,10 +47,11 @@ pricing:
   mercari_fee_rate: 0.10  # 10%
 
 scoring:
-  demand_weight: 0.4
-  profit_weight: 0.4
-  supply_weight: 0.2
-  
+  weights:
+    demand: 0.4
+    profit: 0.4
+    supply: 0.2
+
   thresholds:
     list_candidate: 80.0
     hold: 60.0
