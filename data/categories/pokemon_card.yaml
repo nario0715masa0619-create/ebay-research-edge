@@ -1,0 +1,55 @@
+# Pokemon Card Category Configuration
+category:
+  name: "Pokemon Card"
+  name_ja: "ポケモンカード"
+  description: "Pokemon Trading Card Game cards and sets"
+
+ebay:
+  keywords:
+    - "pokemon card"
+    - "pokemon tcg"
+    - "pokémon card"
+  exclude_keywords:
+    - "storage box"
+    - "binder"
+    - "sleeve"
+    - "proxy"
+  category_ids:
+    - "28440"  # Trading Cards
+
+mercari:
+  keywords:
+    - "ポケモンカード"
+    - "ポケカ"
+  exclude_keywords:
+    - "スリーブ"
+    - "ボックス"
+    - "ファイル"
+
+normalization:
+  title_patterns:
+    - pattern: "japanese|jp|日本語"
+      replacement: ""
+    - pattern: "\\(.*?\\)"
+      replacement: ""
+    - pattern: "\\s+"
+      replacement: " "
+  
+currency:
+  ebay: "USD"
+  mercari: "JPY"
+
+pricing:
+  ebay_fee_rate: 0.129  # 12.9%
+  shipping_cost_estimate_usd: 15.0  # 国内→eBay送料推定
+  mercari_fee_rate: 0.10  # 10%
+
+scoring:
+  demand_weight: 0.4
+  profit_weight: 0.4
+  supply_weight: 0.2
+  
+  thresholds:
+    list_candidate: 80.0
+    hold: 60.0
+    skip: 0.0
