@@ -585,3 +585,111 @@ supply_score = tier_points(active_count)
 \\\
 
 Lower supply (fewer competitors) = higher score = more favorable.
+# docs/function-specification.md の末尾に追加
+
+## 5. ebay_fetcher.py
+
+### クラス: eBayFetcher
+
+**目的**: eBay Sold データを取得し、MarketRecord に変換する。開発モードではサンプルデータを使用。
+
+#### メソッド
+
+##### __init__(use_real_api: bool = False)
+- **説明**: eBayFetcher を初期化
+- **パラメータ**: 
+  - use_real_api (bool): True で実API使用、False でサンプルデータ使用（デフォルト: False）
+- **戻り値**: なし
+- **動作**: 
+  - use_real_api フラグを設定
+  - API キー/シークレットは環境変数から取得（TODO）
+  - Config を読み込む
+
+##### fetch_sold_listings(keyword: str, limit: int = 100)
+- **説明**: eBay Sold リスティングを取得
+- **パラメータ**:
+  - keyword (str): 検索キーワード
+  - limit (int): 取得件数上限（デフォルト: 100）
+- **戻り値**: List[Dict[str, Any]] - リスティングデータのリスト
+- **動作**:
+  1. use_real_api フラグを確認
+  2. True の場合: _fetch_from_api() を呼び出し
+  3. False の場合: _fetch_from_sample_data() を呼び出し
+  4. フィルタリング済みの結果を返す
+
+##### _fetch_from_api(keyword: str, limit: int)
+- **説明**: 実eBay API からデータを取得（本番用）
+- **パラメータ**:
+  - keyword (str): 検索キーワード
+  - limit (int): 件数上限
+- **戻り値**: List[Dict[str, Any]]
+- **状態**: TODO - eBay API 承認後に実装
+- **実装予定**:
+  1. OAuth 2.0 認証
+  2. Browse API に HTTP リクエスト（Sold フィルタ付き）
+  3. キーワード・除外キーワード適用
+  4. レスポンス保存（data/raw/）
+  5. パース・返却
+
+##### _fetch_from_sample_data(keyword: str, limit: int)
+- **説明**: サンプルデータからフィルタリングして取得（開発用）
+- **パラメータ**:
+  - keyword (str): 検索キーワード
+  - limit (int): 件数上限
+- **戻り値**: List[Dict[str, Any]] - API フォーマットのデータ
+- **動作**:
+  1. SampleDataGenerator で 50 件の eBay レコード生成
+  2. keyword でフィルタリング（大文字小文字区別なし）
+  3. exclude_keywords を適用
+  4. limit 件まで制限
+  5. Dict フォーマットに変換して返す
+
+##### convert_to_market_records(raw_listings: List[Dict])
+- **説明**: eBay API フォーマットを MarketRecord に変換
+- **パラメータ**: raw_listings (List[Dict]): eBay API/サンプルデータ
+- **戻り値**: List[MarketRecord] - 変換済みレコード
+- **動作**:
+  1. 各 listing に対して:
+     - itemId → record_id (UUID付き)
+     - title → original_title
+     - price.value → price
+     - shipping.shippingCost.value → shipping
+     - price.currency → currency
+     - price + shipping → total_price
+     - source_site = EBAY
+     - sold_flag = True
+     - active_flag = False
+     - soldDate（パース）→ sold_date
+     - itemWebUrl → listing_url
+  2. MarketRecord インスタンス生成
+  3. エラーがあれば警告ログ出力
+  4. 成功したレコードのみ返す
+
+---
+
+## 6. mercari_fetcher.py
+
+### クラス: MercariF​etcher
+
+**目的**: メルカリから国内価格データを取得（スケルトン）
+
+#### メソッド
+
+##### __init__()
+- **説明**: MercariF​etcher を初期化
+- **パラメータ**: なし
+- **戻り値**: なし
+
+##### fetch_listings(keyword: str, limit: int = 100)
+- **説明**: メルカリからリスティングを取得
+- **パラメータ**:
+  - keyword (str): 検索キーワード
+  - limit (int): 件数上限
+- **戻り値**: List[Dict[str, Any]]
+- **状態**: TODO - Phase 3 で実装予定
+
+##### convert_to_market_records(raw_listings: List[Dict])
+- **説明**: メルカリデータを MarketRecord に変換
+- **パラメータ**: raw_listings (List[Dict]): メルカリデータ
+- **戻り値**: List[MarketRecord]
+- **状態**: TODO - Phase 3 で実装予定
