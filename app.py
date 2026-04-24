@@ -2,7 +2,7 @@
 eBay-Research-Edge - Main Application Entry Point
 
 This is the main script to run the complete research pipeline:
-1. Fetch eBay Sold data OR Import CSV data
+1. Fetch eBay Sold data OR Import CSV data (single or batch)
 2. Fetch Mercari data
 3. Normalize both datasets
 4. Calculate metrics and scores
@@ -12,8 +12,8 @@ This is the main script to run the complete research pipeline:
 Usage:
     python app.py                                              # Run with default settings (online fetch)
     python app.py --keyword "pokemon card" --limit 50          # Fetch with custom keyword
-    python app.py --import-csv amazon.csv --source amazon      # Import Amazon CSV
-    python app.py --import-csv yahoo.csv --source yahoo_auction
+    python app.py --import-csv amazon.csv --source amazon      # Import single Amazon CSV
+    python app.py --batch-import                               # Batch import all CSVs from data/imports/
     python app.py --dashboard                                  # Launch only dashboard (skip fetch/analysis)
 
 Supported CSV Sources:
@@ -46,6 +46,7 @@ from src.display.csv_output import CSVOutput
 from src.models.data_models import SourceSite
 from src.config.config import config
 from src.utils.csv_importer import CSVImporter
+from src.utils.batch_processor import BatchCSVProcessor
 
 # Set up logging
 logging.basicConfig(
@@ -105,7 +106,7 @@ def run_research_pipeline(keyword: str = "pokemon card", limit: int = 50):
 
 def run_pipeline_from_csv(csv_file: str, source_site: str):
     """
-    Run the complete research pipeline (CSV import mode).
+    Run the complete research pipeline (single CSV import mode).
 
     Args:
         csv_file (str): Path to CSV file to import.
@@ -115,7 +116,7 @@ def run_pipeline_from_csv(csv_file: str, source_site: str):
         Path: Path to the generated CSV file.
     """
     logger.info("=" * 60)
-    logger.info("eBay-Research-Edge: Starting Research Pipeline (CSV IMPORT)")
+    logger.info("eBay-Research-Edge: Starting Research Pipeline (CSV IMPORT - SINGLE FILE)")
     logger.info(f"Category: {config.category_name} ({config.category_name_ja})")
     logger.info(f"CSV File: {csv_file}")
     logger.info(f"Source: {source_site}")
@@ -132,10 +133,9 @@ def run_pipeline_from_csv(csv_file: str, source_site: str):
         csv_records = csv_importer.import_csv(csv_file, source_site)
         logger.info(f"✓ Records imported from CSV: {len(csv_records)}")
 
-        # Step 3: Optionally fetch eBay data for comparison
-        logger.info("\n[Step 3] Fetching eBay data for price comparison (optional)...")
+        # Step 3: Fetch eBay data for comparison
+        logger.info("\n[Step 3] Fetching eBay data for price comparison...")
         ebay_fetcher = eBayFetcher(use_real_api=False)
-        mercari_keyword = config.mercari_keywords[0] if config.mercari_keywords else "pokemon card"
         ebay_listings = ebay_fetcher.fetch_sold_listings("pokemon card", limit=50)
         ebay_records = ebay_fetcher.convert_to_market_records(ebay_listings)
         logger.info(f"✓ eBay listings fetched: {len(ebay_records)}")
@@ -152,9 +152,65 @@ def run_pipeline_from_csv(csv_file: str, source_site: str):
         return None
 
 
+def run_pipeline_from_batch(import_dir: str = "data/imports", archive: bool = False):
+    """
+    Run the complete research pipeline (batch CSV import mode).
+
+    Args:
+        import_dir (str): Directory containing CSV files to import.
+        archive (bool): Whether to archive processed files after completion.
+
+    Returns:
+        Path: Path to the generated CSV file.
+    """
+    logger.info("=" * 60)
+    logger.info("eBay-Research-Edge: Starting Research Pipeline (BATCH CSV IMPORT)")
+    logger.info(f"Category: {config.category_name} ({config.category_name_ja})")
+    logger.info(f"Import Directory: {import_dir}")
+    logger.info("=" * 60)
+
+    try:
+        # Step 1: Initialize batch processor
+        logger.info("\n[Step 1] Initializing batch processor...")
+        batch_processor = BatchCSVProcessor(import_dir=import_dir)
+        logger.info("✓ Batch processor initialized")
+
+        # Step 2: Discover and process CSV files
+        logger.info(f"\n[Step 2] Discovering CSV files in: {import_dir}")
+        sources = batch_processor.discover_csv_files()
+        csv_records, total_files, success_count = batch_processor.process_batch(sources)
+        logger.info(f"✓ Processed {success_count}/{total_files} files, imported {len(csv_records)} records")
+
+        # Step 3: Fetch eBay data for comparison
+        logger.info("\n[Step 3] Fetching eBay data for price comparison...")
+        ebay_fetcher = eBayFetcher(use_real_api=False)
+        ebay_listings = ebay_fetcher.fetch_sold_listings("pokemon card", limit=50)
+        ebay_records = ebay_fetcher.convert_to_market_records(ebay_listings)
+        logger.info(f"✓ eBay listings fetched: {len(ebay_records)}")
+
+        # Step 4: Combine records
+        logger.info("\n[Step 4] Combining CSV records with eBay data...")
+        all_records = csv_records + ebay_records
+        logger.info(f"✓ Total records: {len(all_records)}")
+
+        # Step 5: Process and score
+        output_path = _process_and_score_records(all_records)
+
+        # Step 6: Archive processed files (optional)
+        if archive and success_count > 0:
+            logger.info(f"\n[Step 7] Archiving processed files...")
+            batch_processor.archive_processed_files(sources)
+
+        return output_path
+
+    except Exception as e:
+        logger.error(f"\nBatch CSV Import Pipeline failed: {e}", exc_info=True)
+        return None
+
+
 def _process_and_score_records(all_records):
     """
-    Common scoring and analysis logic used by both pipeline modes.
+    Common scoring and analysis logic used by all pipeline modes.
     Handles both multi-source matching and single-source ranking.
 
     Args:
@@ -302,19 +358,27 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python app.py                                         # Run with defaults (online fetch)
-  python app.py --keyword "pokemon card" --limit 50     # Fetch with custom keyword
-  python app.py --import-csv amazon.csv --source amazon # Import Amazon CSV
-  python app.py --dashboard                             # Launch dashboard only
+  python app.py                                          # Run with defaults (online fetch)
+  python app.py --keyword "pokemon card" --limit 50      # Fetch with custom keyword
+  python app.py --import-csv amazon.csv --source amazon  # Import single CSV
+  python app.py --batch-import                           # Batch import all CSVs from data/imports/
+  python app.py --batch-import --archive                 # Batch import + archive processed files
+  python app.py --dashboard                              # Launch dashboard only
         """
     )
 
-    # Create mutually exclusive group: online fetch vs CSV import
+    # Create mutually exclusive group: mode selection
     mode_group = parser.add_mutually_exclusive_group()
 
     mode_group.add_argument(
+        '--batch-import',
+        action='store_true',
+        help='Batch import all CSV files from data/imports/ directory'
+    )
+
+    mode_group.add_argument(
         '--import-csv',
-        help='Import data from CSV file (requires --source)'
+        help='Import data from single CSV file (requires --source)'
     )
 
     mode_group.add_argument(
@@ -337,6 +401,12 @@ Examples:
     )
 
     parser.add_argument(
+        '--archive',
+        action='store_true',
+        help='Archive processed CSV files to data/imports/archive/ (used with --batch-import)'
+    )
+
+    parser.add_argument(
         '--dashboard',
         action='store_true',
         help='Launch Streamlit dashboard only (skip pipeline)'
@@ -351,8 +421,14 @@ Examples:
 
     # Run pipeline (choose mode)
     if not args.dashboard:
-        if args.import_csv:
-            # CSV import mode
+        if args.batch_import:
+            # Batch import mode
+            output_path = run_pipeline_from_batch(
+                import_dir="data/imports",
+                archive=args.archive
+            )
+        elif args.import_csv:
+            # Single CSV import mode
             if not args.source:
                 logger.error("ERROR: --source is required when using --import-csv")
                 parser.print_help()
