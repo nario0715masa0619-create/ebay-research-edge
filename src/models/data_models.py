@@ -5,7 +5,7 @@ This module defines the core data structures (dataclasses and enums) used
 throughout the application for representing items, market records, and scored candidates.
 
 Classes:
-    SourceSite (Enum): Enumeration of data sources (eBay, Mercari, Yahoo Auction).
+    SourceSite (Enum): Enumeration of data sources (eBay, Mercari, Yahoo Auction, Amazon, etc).
     DecisionStatus (Enum): Enumeration of candidate decision statuses.
     Item (Dataclass): Product master information.
     MarketRecord (Dataclass): Individual market listing record.
@@ -21,30 +21,38 @@ from enum import Enum
 class SourceSite(str, Enum):
     """
     Enumeration of data sources.
-    
+
     Values:
-        EBAY: eBay marketplace
-        MERCARI: Mercari marketplace
+        EBAY: eBay international marketplace
+        MERCARI: Mercari Japan
+        AMAZON: Amazon Japan
         YAHOO_AUCTION: Yahoo Auction Japan
-    
+        YAHOO_SHOPPING: Yahoo Shopping Japan
+        YAHOO_FRIL: Yahoo Fril (フリマ) Japan
+        RAKUTEN: Rakuten Ichiba Japan
+
     Usage:
         >>> record.source_site == SourceSite.EBAY
         >>> record.source_site.value  # 'ebay'
     """
     EBAY = "ebay"
     MERCARI = "mercari"
+    AMAZON = "amazon"
     YAHOO_AUCTION = "yahoo_auction"
+    YAHOO_SHOPPING = "yahoo_shopping"
+    YAHOO_FRIL = "yahoo_fril"
+    RAKUTEN = "rakuten"
 
 
 class DecisionStatus(str, Enum):
     """
     Enumeration of candidate decision statuses.
-    
+
     Values:
         LIST_CANDIDATE: Recommended for listing (score >= 80)
         HOLD: Keep for future consideration (60 <= score < 80)
         SKIP: Not recommended (score < 60)
-    
+
     Usage:
         >>> if candidate.decision_status == DecisionStatus.LIST_CANDIDATE:
         ...     print("Ready to list")
@@ -58,10 +66,10 @@ class DecisionStatus(str, Enum):
 class Item:
     """
     Product master record.
-    
+
     Represents a unique product across all sources. Used as a reference
     for multiple MarketRecords from different sources/dates.
-    
+
     Attributes:
         item_id (str): Unique identifier for the product.
                       Generated during normalization process.
@@ -72,7 +80,7 @@ class Item:
         subcategory (Optional[str]): Sub-category classification.
         created_at (datetime): Record creation timestamp.
         updated_at (datetime): Record last update timestamp.
-    
+
     Example:
         >>> item = Item(
         ...     item_id="pkmn_001",
@@ -96,14 +104,14 @@ class Item:
 class MarketRecord:
     """
     Individual market listing record.
-    
+
     Represents a single listing/sale from a specific source (eBay, Mercari, etc).
     Contains raw and normalized information about the listing.
-    
+
     Attributes:
         record_id (str): Unique identifier for this record.
         item_id (str): Foreign key to Item. Links to product master.
-        source_site (SourceSite): Source of this record (ebay/mercari/yahoo_auction).
+        source_site (SourceSite): Source of this record (ebay/mercari/amazon/yahoo_auction/etc).
         search_keyword (str): Keyword used when searching/scraping this record.
         original_title (str): Title as retrieved from the source (unmodified).
         normalized_title (str): Title after normalization processing.
@@ -116,7 +124,7 @@ class MarketRecord:
         sold_date (Optional[datetime]): Date when item was sold (if sold_flag=True).
         listing_url (Optional[str]): URL to the listing on source site.
         fetched_at (datetime): Timestamp when this record was retrieved.
-    
+
     Example:
         >>> record = MarketRecord(
         ...     record_id="ebay_123456",
@@ -155,10 +163,10 @@ class MarketRecord:
 class ScoredCandidate:
     """
     Aggregated results and decision status for a product.
-    
+
     This record represents the final analysis result for a single item,
     containing all calculated metrics and the final decision status.
-    
+
     Attributes:
         candidate_id (str): Unique identifier for this candidate record.
         item_id (str): Foreign key to Item.
@@ -182,7 +190,7 @@ class ScoredCandidate:
         decision_status (DecisionStatus): Final decision (list_candidate/hold/skip).
                                          Based on candidate_score thresholds.
         calculated_at (datetime): Timestamp when metrics were calculated.
-    
+
     Example:
         >>> candidate = ScoredCandidate(
         ...     candidate_id="cand_001",
