@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8"><title>eBay Research Dashboard V4</title>
+    <style>
+        :root { --primary: #f97316; --success: #16a34a; --bg: #fff7ed; }
+        body { font-family: 'Inter', 'Noto Sans JP', sans-serif; background: var(--bg); margin:0; padding: 20px; }
+        header { background: linear-gradient(135deg, #f97316, #ea580c); color: white; padding: 30px; border-radius: 20px; text-align: center; margin-bottom: 30px; }
+        .product-card { background: white; border-radius: 20px; padding: 25px; margin-bottom: 40px; box-shadow: 0 10px 25px rgba(249,115,22,0.1); border: 2px solid #ffedd5; }
+        .top-section { display: flex; gap: 25px; margin-bottom: 25px; border-bottom: 2px solid #fed7aa; padding-bottom: 20px; }
+        .ebay-main-img { width: 200px; height: 200px; object-fit: contain; border-radius: 12px; background: #fff; }
+        .calc-panel { background: #fff7ed; padding: 30px; border-radius: 24px; display: flex; align-items: center; justify-content: space-around; border: 4px solid #fdba74; }
+        .calc-box { text-align: center; }
+        .calc-label { font-size: 12px; color: #9a3412; font-weight: bold; margin-bottom: 8px; }
+        .calc-val { font-size: 26px; font-weight: 900; }
+        .calc-op { font-size: 32px; color: #fdba74; font-weight: bold; }
+        .profit-val { font-size: 28px; color: var(--success); }
+        .btn-all { background: #ea580c; color: white; position: fixed; bottom: 30px; right: 30px; padding: 18px 40px; border-radius: 50px; font-weight: 900; box-shadow: 0 10px 30px rgba(234,88,12,0.4); border: 3px solid white; z-index: 10000; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .item-card { border: 2px solid #ffedd5; border-radius: 15px; padding: 12px; background: #fff; cursor: pointer; transition: 0.3s; }
+        .item-card.selected { border-color: var(--primary); background: #fff7ed; box-shadow: 0 0 0 4px rgba(249,115,22,0.2); }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header><h1>🔥 eBay Research Edge V4</h1><p>Rate: 1 USD = ¥156.31 | <span style="background:white; color:red; padding:2px 10px; border-radius:10px; font-weight:900;">NEW UI: 20:55</span></p></header>
+
+                <div class="product-card" id="prod-0" data-ebay-title="Mega Charizard X ex SAR 110/080 Inferno X M2" data-ebay-price-usd="1449.99" data-ebay-price-jpy="226647.9369" data-ebay-fees="25724.540838150002" data-shipping="1500" data-ebay-img="https://i.ebayimg.com/images/g/zngAAeSwnLZp8B34/s-l225.jpg">
+                    <div class="top-section">
+                        <img class="ebay-main-img" src="https://i.ebayimg.com/images/g/zngAAeSwnLZp8B34/s-l225.jpg" />
+                        <div class="ebay-details" style="flex:1;">
+                            <div style="display:flex; justify-content:space-between;"><h2>Mega Charizard X ex SAR 110/080 Inferno X M2</h2><button onclick="saveItem(0)" style="background:var(--primary); color:white; padding:10px 20px; border-radius:10px; border:none; cursor:pointer; font-weight:bold;">📥 保存</button></div>
+                            <div style="font-size:24px; font-weight:900; color:var(--primary);">eBay売価: ¥226,648</div>
+                            <div class="ai-badge" id="ai-badge-0">AI判定待ち...</div>
+                            <p style="font-size:12px; color:#9a3412;">🔍 検索語: リザードン + 110/080</p>
+                        </div>
+                    </div>
+                    <div class="grid"><div class="item-card" onclick="selectItem(this, 124999, 226647.9369, 25724.540838150002, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m97297455851_1.jpg?1778138368" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥124,999</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m97297455851" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 113999, 226647.9369, 25724.540838150002, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m94637516121_1.jpg?1776942931" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥113,999</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m94637516121" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 144444, 226647.9369, 25724.540838150002, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m62508809762_1.jpg?1778060249" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥144,444</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m62508809762" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 109999, 226647.9369, 25724.540838150002, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m44931499257_1.jpg?1778036648" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥109,999</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m44931499257" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 125000, 226647.9369, 25724.540838150002, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m20007194481_1.jpg?1777634720" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥125,000</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m20007194481" target="_blank" onclick="event.stopPropagation()">詳細</a></div></div>
+                    <div class="calc-panel">
+                        <div class="calc-box"><div class="calc-label">eBay販売価格</div><div class="calc-val">¥226,648</div></div>
+                        <div class="calc-op">−</div>
+                        <div class="calc-box"><div class="calc-label">経費(手数料+送料)</div><div class="calc-val">¥27,225</div></div>
+                        <div class="calc-op">−</div>
+                        <div class="calc-box"><div class="calc-label">仕入れ値</div><div class="calc-val purchase-price" style="color:var(--primary); font-size:30px;">-</div></div>
+                        <div class="calc-op">＝</div>
+                        <div class="calc-box"><div class="calc-label">純利益 (ROI)</div><div class="calc-val profit-val" style="font-size:30px;">-</div></div>
+                    </div>
+                </div>
+                <div class="product-card" id="prod-1" data-ebay-title="Manaphy 004/PPP 5th Players Experience Promo" data-ebay-price-usd="570.0" data-ebay-price-jpy="89096.7" data-ebay-fees="10112.47545" data-shipping="1500" data-ebay-img="https://i.ebayimg.com/images/g/0bQAAeSw9zpp7bkt/s-l225.jpg">
+                    <div class="top-section">
+                        <img class="ebay-main-img" src="https://i.ebayimg.com/images/g/0bQAAeSw9zpp7bkt/s-l225.jpg" />
+                        <div class="ebay-details" style="flex:1;">
+                            <div style="display:flex; justify-content:space-between;"><h2>Manaphy 004/PPP 5th Players Experience Promo</h2><button onclick="saveItem(1)" style="background:var(--primary); color:white; padding:10px 20px; border-radius:10px; border:none; cursor:pointer; font-weight:bold;">📥 保存</button></div>
+                            <div style="font-size:24px; font-weight:900; color:var(--primary);">eBay売価: ¥89,097</div>
+                            <div class="ai-badge" id="ai-badge-1">AI判定待ち...</div>
+                            <p style="font-size:12px; color:#9a3412;">🔍 検索語: マナフィ</p>
+                        </div>
+                    </div>
+                    <div class="grid"><div class="item-card" onclick="selectItem(this, 400, 89096.7, 10112.47545, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m67438563758_1.jpg?1778065521" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥400</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m67438563758" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 450, 89096.7, 10112.47545, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m38317745080_1.jpg?1777984171" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥450</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m38317745080" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 599, 89096.7, 10112.47545, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m33090398169_1.jpg?1778087618" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥599</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m33090398169" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 499, 89096.7, 10112.47545, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m73921890025_1.jpg?1778087148" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥499</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m73921890025" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 7777, 89096.7, 10112.47545, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m44911346423_1.jpg?1777725054" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥7,777</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m44911346423" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 2100, 89096.7, 10112.47545, 1500)"><img src="https://auc-pctr.c.yimg.jp/i/auctions.c.yimg.jp/images.auctions.yahoo.co.jp/image/dr000/auc0205/users/2b803af2cf4ab0103d1980eb8d16503f77d1df23/i-img1200x900-1778148814574mrxqll.jpg?pri=s&w=298&h=298&ccw=298&cch=298&fill=1&fw=298&fh=298&up=0&nf_src=sy&nf_path=images/auc/pc/top/image/1.0.3/na_170x170.png&nf_st=200" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;">マナフィ AR ネオラントv sa VSTARユニバース ポケモンカード</div><div class="price" style="font-weight:bold; color:var(--primary);">¥2,100</div><p style="font-size:10px; color:#999;">ヤフーフリマ</p><a href="https://paypayfleamarket.yahoo.co.jp/item/z605725582" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 4500, 89096.7, 10112.47545, 1500)"><img src="https://auc-pctr.c.yimg.jp/i/auctions.c.yimg.jp/images.auctions.yahoo.co.jp/image/dr000/auc0205/users/450f8f1fdc625b8693c7a635e95bc923371b5ab3/i-img1200x900-1778146242278vgndua.jpg?pri=s&w=298&h=298&ccw=298&cch=298&fill=1&fw=298&fh=298&up=0&nf_src=sy&nf_path=images/auc/pc/top/image/1.0.3/na_170x170.png&nf_st=200" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;">ポケモンカード マナフィ HP70 012/036 CP5</div><div class="price" style="font-weight:bold; color:var(--primary);">¥4,500</div><p style="font-size:10px; color:#999;">ヤフーフリマ</p><a href="https://paypayfleamarket.yahoo.co.jp/item/z569644434" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 6780, 89096.7, 10112.47545, 1500)"><img src="https://auc-pctr.c.yimg.jp/i/auctions.c.yimg.jp/images.auctions.yahoo.co.jp/image/dr000/auc0205/users/f709a126bb7d4e731cd1814f375306e3ab81c47f/i-img900x1200-17778360639424fw6iv.jpg?pri=s&w=298&h=298&ccw=298&cch=298&fill=1&fw=298&fh=298&up=0&nf_src=sy&nf_path=images/auc/pc/top/image/1.0.3/na_170x170.png&nf_st=200" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;">ポケモンカード マナフィ CP5 伝説キラコレクション　</div><div class="price" style="font-weight:bold; color:var(--primary);">¥6,780</div><p style="font-size:10px; color:#999;">ヤフーフリマ</p><a href="https://paypayfleamarket.yahoo.co.jp/item/z603600926" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 400, 89096.7, 10112.47545, 1500)"><img src="https://auc-pctr.c.yimg.jp/i/auctions.c.yimg.jp/images.auctions.yahoo.co.jp/image/dr000/auc0205/users/02147e8edbb87ac649d50469762380b3fb8e2ab0/i-img1200x1200-177809153639522f772.jpg?pri=s&w=298&h=298&ccw=298&cch=298&fill=1&fw=298&fh=298&up=0&nf_src=sy&nf_path=images/auc/pc/top/image/1.0.3/na_170x170.png&nf_st=200" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;">ポケモン 指人形 カイオーガ マナフィ 2個セット フィギュア</div><div class="price" style="font-weight:bold; color:var(--primary);">¥400</div><p style="font-size:10px; color:#999;">ヤフーフリマ</p><a href="https://paypayfleamarket.yahoo.co.jp/item/z605419000" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 5700, 89096.7, 10112.47545, 1500)"><img src="https://auc-pctr.c.yimg.jp/i/auctions.c.yimg.jp/images.auctions.yahoo.co.jp/image/dr000/auc0204/users/695276b00db6cf8b57b3d5c3fe0f670be932029f/i-img1200x906-17770958259810lqdeu.jpg?pri=s&w=298&h=298&ccw=298&cch=298&fill=1&fw=298&fh=298&up=0&nf_src=sy&nf_path=images/auc/pc/top/image/1.0.3/na_170x170.png&nf_st=200" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;">ポケットモンスターダイヤモンド・パール(ポケモンレンジャー産マナフィ)</div><div class="price" style="font-weight:bold; color:var(--primary);">¥5,700</div><p style="font-size:10px; color:#999;">ヤフーフリマ</p><a href="https://paypayfleamarket.yahoo.co.jp/item/z598224630" target="_blank" onclick="event.stopPropagation()">詳細</a></div></div>
+                    <div class="calc-panel">
+                        <div class="calc-box"><div class="calc-label">eBay販売価格</div><div class="calc-val">¥89,097</div></div>
+                        <div class="calc-op">−</div>
+                        <div class="calc-box"><div class="calc-label">経費(手数料+送料)</div><div class="calc-val">¥11,612</div></div>
+                        <div class="calc-op">−</div>
+                        <div class="calc-box"><div class="calc-label">仕入れ値</div><div class="calc-val purchase-price" style="color:var(--primary); font-size:30px;">-</div></div>
+                        <div class="calc-op">＝</div>
+                        <div class="calc-box"><div class="calc-label">純利益 (ROI)</div><div class="calc-val profit-val" style="font-size:30px;">-</div></div>
+                    </div>
+                </div>
+                <div class="product-card" id="prod-2" data-ebay-title="MEGA Gengar ex SAR 240/193 MEGA Dream ex M2a" data-ebay-price-usd="1077.95" data-ebay-price-jpy="168494.3645" data-ebay-fees="19124.11037075" data-shipping="1500" data-ebay-img="https://i.ebayimg.com/images/g/SK0AAeSwa5xp8BRw/s-l225.jpg">
+                    <div class="top-section">
+                        <img class="ebay-main-img" src="https://i.ebayimg.com/images/g/SK0AAeSwa5xp8BRw/s-l225.jpg" />
+                        <div class="ebay-details" style="flex:1;">
+                            <div style="display:flex; justify-content:space-between;"><h2>MEGA Gengar ex SAR 240/193 MEGA Dream ex M2a</h2><button onclick="saveItem(2)" style="background:var(--primary); color:white; padding:10px 20px; border-radius:10px; border:none; cursor:pointer; font-weight:bold;">📥 保存</button></div>
+                            <div style="font-size:24px; font-weight:900; color:var(--primary);">eBay売価: ¥168,494</div>
+                            <div class="ai-badge" id="ai-badge-2">AI判定待ち...</div>
+                            <p style="font-size:12px; color:#9a3412;">🔍 検索語: ゲンガー + 240/193</p>
+                        </div>
+                    </div>
+                    <div class="grid"><div class="item-card" onclick="selectItem(this, 42300, 168494.3645, 19124.11037075, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m20950051425_1.jpg?1778080356" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥42,300</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m20950051425" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 50000, 168494.3645, 19124.11037075, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m92174547770_1.jpg?1764507707" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥50,000</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m92174547770" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 60100, 168494.3645, 19124.11037075, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m68619479259_1.jpg?1778147220" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥60,100</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m68619479259" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 1800, 168494.3645, 19124.11037075, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m29324223478_1.jpg?1774236358" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥1,800</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m29324223478" target="_blank" onclick="event.stopPropagation()">詳細</a></div><div class="item-card" onclick="selectItem(this, 73999, 168494.3645, 19124.11037075, 1500)"><img src="https://static.mercdn.net/thumb/item/webp/m40962887809_1.jpg?1778049172" /><div class="title" style="font-size:12px; height:32px; overflow:hidden;"></div><div class="price" style="font-weight:bold; color:var(--primary);">¥73,999</div><p style="font-size:10px; color:#999;">メルカリ</p><a href="https://jp.mercari.com/item/m40962887809" target="_blank" onclick="event.stopPropagation()">詳細</a></div></div>
+                    <div class="calc-panel">
+                        <div class="calc-box"><div class="calc-label">eBay販売価格</div><div class="calc-val">¥168,494</div></div>
+                        <div class="calc-op">−</div>
+                        <div class="calc-box"><div class="calc-label">経費(手数料+送料)</div><div class="calc-val">¥20,624</div></div>
+                        <div class="calc-op">−</div>
+                        <div class="calc-box"><div class="calc-label">仕入れ値</div><div class="calc-val purchase-price" style="color:var(--primary); font-size:30px;">-</div></div>
+                        <div class="calc-op">＝</div>
+                        <div class="calc-box"><div class="calc-label">純利益 (ROI)</div><div class="calc-val profit-val" style="font-size:30px;">-</div></div>
+                    </div>
+                </div>
+    <button class="btn-all" onclick="saveAll()">🚀 全て一括保存</button>
+    <script>
+        const selected = {};
+        function selectItem(el, price, ebayJpy, fees, ship) {
+            const card = el.closest('.product-card');
+            const idx = card.id.split('-')[1];
+            card.querySelectorAll('.item-card').forEach(c => c.classList.remove('selected'));
+            el.classList.add('selected');
+            const profit = ebayJpy - (fees + ship) - price;
+            const roi = (profit / (price + fees + ship)) * 100;
+            card.querySelector('.purchase-price').innerText = '¥' + price.toLocaleString();
+            const pVal = card.querySelector('.profit-val');
+            pVal.innerText = '¥' + Math.round(profit).toLocaleString() + ' (' + roi.toFixed(1) + '%)';
+            pVal.style.color = profit < 0 ? '#ef4444' : '#16a34a';
+            selected[idx] = { domestic_title: el.querySelector('.title').innerText, domestic_price: price, domestic_url: el.querySelector('a').href, domestic_site: '国内サイト' };
+            fetch('/analyze', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ebay_title:card.dataset.ebayTitle, domestic_title:selected[idx].domestic_title}) })
+            .then(r=>r.json()).then(d=>{ if(d.success) document.getElementById('ai-badge-'+idx).innerText = '判定: ' + d.result.match_score + '% / ' + d.result.condition; });
+        }
+        function saveItem(idx) {
+            if(!selected[idx]) return alert('未選択');
+            const card = document.getElementById('prod-'+idx);
+            fetch('/export', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify([{ ...selected[idx], ebay_title:card.dataset.ebayTitle, ebay_price_jpy:card.dataset.ebayPriceJpy, profit:0 }]) })
+            .then(r=>r.json()).then(d=>alert(d.success?'保存':'失敗'));
+        }
+        function saveAll() {
+            const list = [];
+            document.querySelectorAll('.product-card').forEach(c => { const i = c.id.split('-')[1]; if(selected[i]) list.push({ ...selected[i], ebay_title:c.dataset.ebayTitle }); });
+            fetch('/export', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(list) }).then(r=>r.json()).then(d=>alert(d.success?'一括保存':'失敗'));
+        }
+        window.onload = () => { document.querySelectorAll('.product-card').forEach(c => { const f = c.querySelector('.item-card'); if(f) f.click(); }); };
+    </script>
+</div></body></html>
