@@ -19,9 +19,11 @@ eBay での売上データと日本国内マーケットプレイス（Amazon、
 - ✅ **SourceSite Enum 拡張**: Amazon、Yahoo（Auction/Shopping/Fril）、Rakuten に対応
 - ✅ **フェッチャ骨格**: 5 つのプラットフォーム用の fetcher スケルトン
 
-### Phase 5: CSV インポート・バッチ処理（✨ 完成）
-- ✅ **Phase 5A**: 単一 CSV インポート（Amazon、Yahoo、Rakuten）
-- ✅ **Phase 5B**: バッチ処理・自動検出・アーカイブ機能
+### Phase 5: Live Scraping & Interactive Report (✨ 最新・完成)
+- ✅ **Live Scraping**: メルカリ、ハードオフ、Yahoo!フリマからのリアルタイムデータ取得
+- ✅ **Interactive Report**: クリックで利益計算・ROIをシミュレーションできるHTMLレポート生成
+- ✅ **eBay API Integration**: eBay Browse API を使用した正確な商品画像取得
+- ✅ **Filter Optimization**: 複数枚セット、フィギュア、ボックス、オークション形式の自動除外
 
 ---
 
@@ -150,9 +152,7 @@ ebay-research-edge/
 | Phase 2 | Mercari Fetcher + Tests | ✅ 完成 |
 | Phase 3 | Streamlit Dashboard | ✅ 完成 |
 | Phase 4 | マルチソース準備 | ✅ 完成 |
-| Phase 5A | CSV インポート基盤 | ✅ 完成 |
-| Phase 5B | バッチ処理・自動化 | ✅ 完成 |
-| Phase 5C | 定期実行スクリプト | 🔄 計画中 |
+| Phase 5 | ライブスクレイピング & インタラクティブ・レポート | ✅ 完成 (New!) |
 | Phase 6 | Amazon/Yahoo/Rakuten 実装 | 🔄 計画中 |
 | Phase 7 | マルチカテゴリ対応 | 🔄 計画中 |
 
