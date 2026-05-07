@@ -5,6 +5,10 @@ from dotenv import load_dotenv
 import pandas as pd
 import webbrowser
 import time
+import json
+import threading
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 load_dotenv()
 
@@ -42,6 +46,30 @@ def get_ebay_token():
     except Exception as e:
         print(f"⚠️ トークン取得エラー: {e}")
     return None
+
+def save_to_google_sheets(data_list):
+    """
+    Save a list of items to Google Sheets via GAS Web App.
+    """
+    gas_url = os.getenv('GAS_WEBAPP_URL')
+    if not gas_url:
+        print("❌ GAS_WEBAPP_URL not found in .env")
+        return False
+
+    try:
+        r = requests.post(gas_url, json=data_list, timeout=15)
+        if r.status_code == 200:
+            res = r.json()
+            if res.get('success'):
+                print(f"✅ {len(data_list)}件をGoogle Sheetsに保存しました。")
+                return True
+            else:
+                print(f"❌ GASエラー: {res.get('error')}")
+        else:
+            print(f"❌ HTTPエラー ({r.status_code}): {r.text}")
+    except Exception as e:
+        print(f"❌ 送信エラー: {e}")
+    return False
 
 def extract_keywords(title):
     kw = []
@@ -549,6 +577,27 @@ async def main():
             border: 2px solid #e2e8f0;
         }
 
+        .btn {
+            padding: 8px 16px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        .btn-save {
+            background: var(--primary);
+            color: white;
+            font-size: 14px;
+        }
+
+        .btn-save:hover {
+            background: var(--primary-hover);
+            transform: scale(1.05);
+        }
+
         .calc-box { text-align: center; flex: 1; }
         .calc-operator { font-size: 24px; font-weight: bold; color: #94a3b8; margin: 0 10px; }
         .calc-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
@@ -624,12 +673,24 @@ async def main():
                 initial_roi = (initial_profit / (initial_min + ebay_fees + shipping)) * 100 if initial_min > 0 else 0
                 profit_class = "negative" if initial_profit < 0 else ""
 
+                # Build data for export for this section
+                default_item = next((r for r in valid_results if r['price'] == initial_min), valid_results[0]) if valid_results else None
+                
                 html_content += f"""
-                <div class="product-card" id="prod-{idx}">
+                <div class="product-card" id="prod-{idx}" 
+                     data-ebay-title="{ebay_title}" 
+                     data-ebay-price-usd="{ebay_price_usd}"
+                     data-ebay-price-jpy="{ebay_price_jpy}"
+                     data-ebay-fees="{ebay_fees}"
+                     data-shipping="{shipping}"
+                     data-ebay-img="{ebay_img}">
                     <div class="top-section">
                         <img class="ebay-main-img" src="{ebay_img}" />
                         <div class="ebay-details">
-                            <h2>{ebay_title}</h2>
+                            <div style="display:flex; justify-content:space-between; align-items:start;">
+                                <h2 style="flex:1;">{ebay_title}</h2>
+                                <button class="btn btn-save" onclick="saveCurrentItem({idx})">📥 この商品を保存</button>
+                            </div>
                             <div class="price-badge">eBay: ${ebay_price_usd:.2f} (¥{ebay_price_jpy:,.0f})</div>
                             <p style="margin-top:10px; color:#64748b;">キーワード: {kw_display}</p>
                         </div>
@@ -672,34 +733,149 @@ async def main():
     html_content += """
     </main>
 
-    <script>
-    function selectItem(el, buyPrice, ebayPrice, fees, shipping) {
-        const parent = el.closest('.product-card');
-        
-        // UI update: remove selected from all cards in THIS product-card
-        parent.querySelectorAll('.item-card').forEach(card => card.classList.remove('selected'));
-        el.classList.add('selected');
+    <div id="status-msg" style="position:fixed; bottom:80px; right:20px; padding:15px 25px; border-radius:10px; display:none; z-index:1000; color:white; font-weight:bold; box-shadow:0 4px 15px rgba(0,0,0,0.2);"></div>
+    
+    <div style="position:fixed; bottom:0; left:0; right:0; background:rgba(255,255,255,0.9); backdrop-filter:blur(10px); padding:15px; border-top:1px solid #e2e8f0; display:flex; justify-content:center; gap:20px; z-index:999; box-shadow: 0 -5px 15px rgba(0,0,0,0.05);">
+        <button class="btn btn-save" style="background:var(--success); width:auto; padding:10px 40px; font-size:16px;" onclick="saveAllItems()">🚀 全ての選択済み商品を一括保存</button>
+    </div>
 
-        // Calculation
-        const profit = ebayPrice - buyPrice - fees - shipping;
-        const totalCost = buyPrice + fees + shipping;
-        const profitRate = totalCost > 0 ? (profit / totalCost) * 100 : 0;
-        
-        const panel = parent.querySelector('.calc-panel');
-        panel.querySelector('.purchase-price').innerText = '¥' + Math.round(buyPrice).toLocaleString();
-        
-        const profitEl = panel.querySelector('.profit-val');
-        profitEl.innerText = '¥' + Math.round(profit).toLocaleString() + ' (' + profitRate.toFixed(1) + '%)';
-        
-        if (profit >= 0) {
-            profitEl.style.color = '#22c55e';
-        } else {
-            profitEl.style.color = '#ef4444';
+    <script>
+        const selectedItems = {};
+
+        function selectItem(el, price, ebayJpy, fees, shipping) {
+            const card = el.closest('.product-card');
+            const idx = card.id.split('-')[1];
+            
+            card.querySelectorAll('.item-card').forEach(c => c.classList.remove('selected'));
+            el.classList.add('selected');
+
+            const profit = ebayJpy - price - fees - shipping;
+            const roi = (profit / (price + fees + shipping)) * 100;
+            
+            const panel = card.querySelector('.calc-panel');
+            panel.querySelector('.purchase-price').innerText = '¥' + Math.round(price).toLocaleString();
+            const profitEl = panel.querySelector('.profit-val');
+            profitEl.innerText = '¥' + Math.round(profit).toLocaleString() + ' (' + roi.toFixed(1) + '%)';
+            
+            if(profit < 0) profitEl.style.color = '#ef4444';
+            else profitEl.style.color = '#22c55e';
+
+            selectedItems[idx] = {
+                domestic_title: el.querySelector('.title').innerText.replace('...', ''),
+                domestic_price: price,
+                domestic_url: el.querySelector('a').href,
+                domestic_site: el.querySelector('p').innerText
+            };
         }
-    }
+
+        async function saveCurrentItem(idx) {
+            const card = document.getElementById('prod-' + idx);
+            if(!selectedItems[idx]) {
+                const sel = card.querySelector('.item-card.selected');
+                if(sel) {
+                    selectItem(sel, 
+                               parseInt(sel.querySelector('.price').innerText.replace(/[¥,]/g, '')),
+                               parseFloat(card.dataset.ebayPriceJpy),
+                               parseFloat(card.dataset.ebayFees),
+                               parseFloat(card.dataset.shipping));
+                } else {
+                    showStatus('商品を選択してください', 'error');
+                    return;
+                }
+            }
+            
+            const data = {
+                ebay_title: card.dataset.ebayTitle,
+                ebay_price_usd: parseFloat(card.dataset.ebayPriceUsd),
+                ebay_price_jpy: parseFloat(card.dataset.ebayPriceJpy),
+                ebay_fees: parseFloat(card.dataset.ebayFees),
+                shipping: parseFloat(card.dataset.shipping),
+                ebay_img: card.dataset.ebayImg,
+                ...selectedItems[idx],
+                profit: Math.round(parseFloat(card.dataset.ebayPriceJpy) - selectedItems[idx].domestic_price - parseFloat(card.dataset.ebayFees) - parseFloat(card.dataset.shipping)),
+                roi: ((parseFloat(card.dataset.ebayPriceJpy) - selectedItems[idx].domestic_price - parseFloat(card.dataset.ebayFees) - parseFloat(card.dataset.shipping)) / (selectedItems[idx].domestic_price + parseFloat(card.dataset.ebayFees) + parseFloat(card.dataset.shipping)) * 100).toFixed(1)
+            };
+            await sendExport([data]);
+        }
+
+        async function saveAllItems() {
+            const allData = [];
+            document.querySelectorAll('.product-card').forEach(card => {
+                const idx = card.id.split('-')[1];
+                const selection = selectedItems[idx] || (function() {
+                    const sel = card.querySelector('.item-card.selected');
+                    if(!sel) return null;
+                    return {
+                        domestic_title: sel.querySelector('.title').innerText.replace('...', ''),
+                        domestic_price: parseInt(sel.querySelector('.price').innerText.replace(/[¥,]/g, '')),
+                        domestic_url: sel.querySelector('a').href,
+                        domestic_site: sel.querySelector('p').innerText
+                    };
+                })();
+
+                if(selection) {
+                    const ebayJpy = parseFloat(card.dataset.ebayPriceJpy);
+                    const fees = parseFloat(card.dataset.ebayFees);
+                    const shipping = parseFloat(card.dataset.shipping);
+                    const profit = ebayJpy - selection.domestic_price - fees - shipping;
+                    const roi = (profit / (selection.domestic_price + fees + shipping)) * 100;
+                    allData.push({
+                        ebay_title: card.dataset.ebayTitle,
+                        ebay_price_usd: parseFloat(card.dataset.ebayPriceUsd),
+                        ebay_price_jpy: ebayJpy,
+                        ebay_fees: fees,
+                        shipping: shipping,
+                        ebay_img: card.dataset.ebayImg,
+                        ...selection,
+                        profit: Math.round(profit),
+                        roi: roi.toFixed(1)
+                    });
+                }
+            });
+            if(allData.length === 0) { showStatus('保存する商品がありません', 'error'); return; }
+            await sendExport(allData);
+        }
+
+        async function sendExport(dataList) {
+            showStatus('保存中...', 'info');
+            try {
+                const response = await fetch('http://localhost:5000/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(dataList)
+                });
+                const result = await response.json();
+                if(result.success) showStatus('✅ スプレッドシートに保存しました！', 'success');
+                else showStatus('❌ エラー: ' + result.error, 'error');
+            } catch (e) {
+                showStatus('❌ サーバー接続失敗。Pythonを実行し続けてください。', 'error');
+            }
+        }
+
+        function showStatus(msg, type) {
+            const el = document.getElementById('status-msg');
+            el.innerText = msg;
+            el.style.display = 'block';
+            el.style.background = type === 'success' ? '#22c55e' : (type === 'error' ? '#ef4444' : '#6366f1');
+            setTimeout(() => { el.style.display = 'none'; }, 4000);
+        }
+
+        // Init defaults
+        document.querySelectorAll('.product-card').forEach(card => {
+            const sel = card.querySelector('.item-card.selected');
+            if(sel) {
+                const idx = card.id.split('-')[1];
+                selectedItems[idx] = {
+                    domestic_title: sel.querySelector('.title').innerText.replace('...', ''),
+                    domestic_price: parseInt(sel.querySelector('.price').innerText.replace(/[¥,]/g, '')),
+                    domestic_url: sel.querySelector('a').href,
+                    domestic_site: sel.querySelector('p').innerText
+                };
+            }
+        });
     </script>
 
-    <footer>
+    <footer style="margin-bottom: 100px;">
         <p>このレポートは参考用です。実際の仕入れ・販売判断は慎重に行ってください。</p>
     </footer>
 </div>
@@ -720,4 +896,42 @@ async def main():
     else:
         print(f"❌ レポートファイルの作成に失敗しました: {report_path}")
 
-asyncio.run(main())
+app = Flask(__name__)
+CORS(app)
+
+@app.route('/export', methods=['POST'])
+def export_api():
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': 'No data received'})
+        
+        success = save_to_google_sheets(data)
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save to Google Sheets. Check Python console for details.'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+def run_server():
+    print("\n🚀 エクスポート待受サーバー起動中 (http://localhost:5000)...")
+    app.run(port=5000, debug=False, use_reloader=False)
+
+if __name__ == '__main__':
+    # Start the export server in a background thread
+    threading.Thread(target=run_server, daemon=True).start()
+    
+    # Run the report generation
+    asyncio.run(main())
+    
+    # Keep the main process alive so the server doesn't die
+    print("\n✅ 全ての処理が完了しました。レポートで保存ボタンを使用できます。")
+    print("（Ctrl+C で終了します）")
+    while True:
+        try:
+            import time
+            time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n👋 終了します。")
+            break
