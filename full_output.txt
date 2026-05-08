@@ -1,0 +1,33 @@
+ * Serving Flask app 'generate_research_report'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5009
+Press CTRL+C to quit
+127.0.0.1 - - [08/May/2026 13:11:36] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [08/May/2026 13:11:36] "GET /data HTTP/1.1" 200 -
+127.0.0.1 - - [08/May/2026 13:11:36] "GET /favicon.ico HTTP/1.1" 404 -
+Traceback (most recent call last):
+  File "D:\AI_スクリプト成果物\ebay-research-edge\generate_research_report.py", line 183, in main_process
+    print(f"\U0001f50d [{idx+1}/10] {title} ...")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'cp932' codec can't encode character '\U0001f50d' in position 0: illegal multibyte sequence
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\AI_スクリプト成果物\ebay-research-edge\generate_research_report.py", line 246, in <module>
+    asyncio.run(main_process())
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\nario\AppData\Local\Programs\Python\Python313\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Users\nario\AppData\Local\Programs\Python\Python313\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\nario\AppData\Local\Programs\Python\Python313\Lib\asyncio\base_events.py", line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "D:\AI_スクリプト成果物\ebay-research-edge\generate_research_report.py", line 203, in main_process
+    print(f"\u274c Error: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'cp932' codec can't encode character '\u274c' in position 0: illegal multibyte sequence
