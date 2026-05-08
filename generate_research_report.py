@@ -46,30 +46,40 @@ async def fetch_yahoo_auction_history(search_query, browser):
         if isinstance(search_query, list):
             search_query = ' '.join(search_query)
         
-        new_page = await asyncio.wait_for(browser.new_page(), timeout=5)
-        new_page.set_default_timeout(5000)
-        
+        new_page = await asyncio.wait_for(browser.new_page(), timeout=10)
+        # より広範囲のクラス名で価格を取得
         encoded_query = urllib.parse.quote(search_query, safe='')
         url = f'https://auctions.yahoo.co.jp/closedsearch/closedsearch?p={encoded_query}&va={encoded_query}&b=1&n=50'
         
-        await asyncio.wait_for(new_page.goto(url, wait_until='domcontentloaded'), timeout=8)
-        await new_page.wait_for_timeout(1000)
+        await asyncio.wait_for(new_page.goto(url, wait_until='domcontentloaded'), timeout=15)
+        await new_page.wait_for_timeout(1500)
         
-        text = await new_page.evaluate('() => document.body.innerText')
+        # fontWeightBold を含むクラスから数値を抽出
+        prices = await new_page.evaluate("""() => {
+            const elements = document.querySelectorAll('[class*="fontWeightBold"]');
+            return Array.from(elements)
+                .map(el => el.innerText.replace(/[^0-9]/g, ''))
+                .filter(v => v.length >= 2)
+                .map(v => parseInt(v));
+        }""")
+        
+        text_full = await new_page.evaluate('() => document.body.innerText')
         await new_page.close()
         
-        min_match = re.search(r'最安\s*(\d+,?\d*)\s*円', text)
-        avg_match = re.search(r'平均\s*(\d+,?\d*)\s*円', text)
-        max_match = re.search(r'最高\s*(\d+,?\d*)\s*円', text)
-        
-        if min_match and avg_match and max_match:
+        if prices:
+            prices.sort()
+            n = len(prices)
+            # 極端な外れ値を除外（上位・下位10%）
+            trimmed = prices[max(1, n//10):max(n, n-n//10)] if n > 10 else prices
+            median = trimmed[len(trimmed)//2]
+            
             return {
-                'min': int(min_match.group(1).replace(',', '')),
-                'avg': int(avg_match.group(1).replace(',', '')),
-                'max': int(max_match.group(1).replace(',', ''))
+                'min': min(prices),
+                'median': median,
+                'max': max(prices),
+                'count': n,
+                'url': url
             }
-    except asyncio.TimeoutError:
-        print(f'Yahoo timeout for: {search_query}')
     except Exception as e:
         print(f'Yahoo error: {e}')
     return None
@@ -90,12 +100,42 @@ async def get_ebay_image(token, title):
 def extract_keywords(title):
     kw = []
     t = unicodedata.normalize('NFKD', title).lower()
-    mapping = {'manaphy':'マナフィ','charizard':'リザードン','pikachu':'ピカチュウ','blastoise':'カメックス','venusaur':'フシギバナ','gengar':'ゲンガー','articuno':'フリーザー'}
-    for en, ja in mapping.items():
-        if en in t: kw.append(ja); break
-    if 'sar' in t: kw.append('SAR')
+    
+    # 1. 型番抽出 (例: 123/456) - これが最優先
     m = re.search(r'(\d+/[A-Z0-9]+)', title.upper())
-    if m: kw.append(m.group(1))
+    card_number = m.group(1) if m else None
+    
+    # 2. レアリティ抽出 (独立単語として)
+    rarity = None
+    if re.search(r'\bsar\b', t): rarity = 'SAR'
+    elif re.search(r'\bsr\b', t): rarity = 'SR'
+    elif re.search(r'\bar\b', t): rarity = 'AR'
+    elif re.search(r'\bhr\b', t): rarity = 'HR'
+    elif re.search(r'\bur\b', t): rarity = 'UR'
+    
+    # 3. ポケモン名の翻訳マッピング
+    mapping = {'pikachu':'ピカチュウ','charizard':'リザードン','manaphy':'マナフィ','gengar':'ゲンガー','mewtwo':'ミュウツー','mew':'ミュウ'}
+    ja_name = None
+    for en, ja in mapping.items():
+        if en in t: ja_name = ja; break
+    
+    # 【重要】検索ワードの組み立て
+    if card_number:
+        # 型番がある場合は、型番とレアリティを優先 (以前の絶好調な組み合わせ)
+        if rarity: kw.append(rarity)
+        kw.append(card_number)
+        # 念のため、名前も最後に入れる（ノイズになるようなら外すことも検討）
+        if ja_name: kw.append(ja_name)
+    else:
+        # 型番がない場合は、名前とレアリティを主役にする
+        if ja_name: kw.append(ja_name)
+        if rarity: kw.append(rarity)
+        
+    # フォールバック: 全くキーワードがない場合のみ、タイトルから抽出
+    if not kw:
+        words = re.findall(r'[a-zA-Z0-9]{3,}', title)
+        kw = words[:2]
+        
     return kw
 
 async def search_mercari(page, kw):
@@ -110,13 +150,11 @@ async def search_mercari(page, kw):
         for it in items[:15]:
             try:
                 d = await it.evaluate("""el => {
+                    const imgDiv = el.querySelector('div[aria-label]');
                     const img = el.querySelector('img');
-                    let title = img ? img.alt : "";
-                    if (!title || title.includes('¥')) {
-                        title = el.getAttribute('aria-label') || "";
-                    }
-                    // 価格部分を削除 (例: "商品名 ¥1,000" -> "商品名")
-                    title = title.replace(/¥\s?[\d,]+/g, '').trim();
+                    let rawTitle = imgDiv ? imgDiv.getAttribute('aria-label') : (img ? img.alt : "");
+                    // 「の画像」や「のサムネイル」以降を削除し、さらに価格表示があれば削除
+                    let title = rawTitle.replace(/の(画像|サムネイル).*$/, "").replace(/¥\s?[\d,]+/, "").trim();
                     return {
                         title: title,
                         price: el.innerText,
@@ -125,11 +163,15 @@ async def search_mercari(page, kw):
                         html: el.innerHTML
                     }
                 }""")
-                if any(x in d['price'] or x in d['title'] or x in d['html'] for x in ["入札", "オークション", "現在", "残り", "〜"]): continue
+                if not d['title']:
+                    print(f"DEBUG: Mercari title empty for {d['href']}")
+                
+                exclude_kws = ["入札", "オークション", "現在", "残り", "〜", "盗難防止", "観賞用", "展示用", "レプリカ"]
+                if any(x in d.get('price','') or x in d.get('title','') or x in d.get('html','') for x in exclude_kws): continue
                 m = re.search(r'¥\s*([\d,]+)', d['price'])
                 if m:
                     price = int(m.group(1).replace(',',''))
-                    if price < 100 or "盗難防止" in d['title'] or "盗難防止" in d['html']: continue
+                    if price < 100: continue
                     res.append({'price':price, 'title':d['title'], 'url':d['href'], 'image':d['img'], 'site':'メルカリ'})
             except: continue
         return res[:5]
@@ -164,8 +206,8 @@ async def search_yahoo(page, kw):
                         html: el.innerHTML
                     }
                 }""")
-                if any(x in d['price'] or x in d['html'] for x in ["入札", "オークション", "現在", "残り", "〜", "盗難防止"]): continue
-                if "盗難防止" in d['title']: continue
+                exclude_kws = ["盗難防止", "観賞用", "展示用", "レプリカ"]
+                if any(x in d['title'] or x in d['html'] for x in exclude_kws): continue
                 href = d['href']
                 if href:
                     if href.startswith('/'): href = "https://paypayfleamarket.yahoo.co.jp" + href
@@ -190,25 +232,15 @@ async def search_hardoff(page, kw):
         for it in items[:5]:
             try:
                 data = await it.evaluate("""el => {
-                    const link = el.querySelector('a[href*="/product/"]');
-                    const img = el.querySelector('img');
-                    let title = img ? img.alt : "";
-                    if (!title) {
-                        const titleEl = el.querySelector('.item-name, h2, h3');
-                        title = titleEl ? titleEl.innerText : "";
-                    }
+                    const link = el.querySelector('a');
                     const text = el.innerText;
                     const p = text.match(/[\\d,]+/g);
-                    return { 
-                        title: title.trim(), 
-                        price: p ? p[p.length-1] : "0", 
-                        href: link ? link.href : "", 
-                        img: img ? img.src : "" 
-                    }
+                    return { title: text.split('\\n')[0], price: p?p[p.length-1]:"0", href: link?link.href:"", img: el.querySelector('img')?el.querySelector('img').src:"" }
                 }""")
                 if data['href']:
                     price = int(data['price'].replace(',',''))
-                    if price >= 100 and "盗難防止" not in data['title']:
+                    exclude_kws = ["盗難防止", "観賞用", "展示用", "レプリカ"]
+                    if price >= 100 and not any(x in data['title'] for x in exclude_kws):
                         res.append({'price':price, 'title':data['title'], 'url':data['href'], 'image':data['img'], 'site':'ハードオフ'})
             except: continue
         return res
@@ -263,9 +295,7 @@ async def main_process():
                 res_obj['items'].extend(h_res)
                 
                 # 4. ヤフオク履歴
-                print("DEBUG: About to call fetch_yahoo_auction_history")
                 y_history = await fetch_yahoo_auction_history(kw, browser)
-                print(f"DEBUG: y_history result = {y_history}")
                 res_obj['y_history'] = y_history
                 
             except Exception as e:
@@ -437,21 +467,6 @@ def index():
         .item-price { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
         .item-site { font-size: 0.75rem; color: var(--text-dim); margin-top: 4px; }
 
-        .yahoo-history-box {
-            grid-column: 1 / -1;
-            background: linear-gradient(90deg, rgba(255, 0, 51, 0.1) 0%, rgba(99, 102, 241, 0.1) 100%);
-            border: 1px solid rgba(255, 0, 51, 0.3);
-            border-radius: 20px;
-            padding: 20px;
-            display: flex;
-            justify-content: space-around;
-            align-items: center;
-        }
-
-        .yahoo-stat { text-align: center; }
-        .yahoo-stat .val { font-size: 1.5rem; font-weight: 800; color: #fff; }
-        .yahoo-stat .label { font-size: 0.7rem; color: #ff9999; text-transform: uppercase; }
-
         .ai-analysis {
             background: rgba(30, 41, 59, 0.8);
             border-left: 4px solid var(--accent);
@@ -513,21 +528,24 @@ def index():
                         container.appendChild(div);
                     }
 
-                    // ヤフオク履歴の詳細リンク生成
-                    const encodedKw = encodeURIComponent((res.keywords || []).join(' '));
-                    const yahooHistoryUrl = `https://auctions.yahoo.co.jp/closedsearch/closedsearch?p=${encodedKw}&va=${encodedKw}&b=1&n=50`;
-
-                    const historyHtml = res.y_history ? `
-                        <div class="yahoo-history-box">
-                            <div style="text-align:center;">
-                                <div style="font-weight:700; color:#ff0033;">ヤフオク履歴</div>
-                                <a href="${yahooHistoryUrl}" target="_blank" style="font-size:10px; color:#fff; opacity:0.7;">履歴一覧を開く</a>
+                    let historyHtml = '<div class="stat-box history-box" style="grid-column: span 2; background: rgba(30, 41, 59, 0.5); opacity:0.6; text-align:center; padding:15px;">ヤフオク履歴 取得中...</div>';
+                    if (res.y_history) {
+                        historyHtml = `
+                            <div class="stat-box history-box" style="grid-column: span 2; background: rgba(30, 41, 59, 0.5);">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                    <span style="font-weight:bold; color:var(--accent);">ヤフオク落札相場 (${res.y_history.count}件)</span>
+                                    <a href="${res.y_history.url}" target="_blank" style="font-size:10px; color:var(--accent); text-decoration:none; border:1px solid var(--accent); padding:2px 6px; border-radius:4px;">履歴一覧を開く</a>
+                                </div>
+                                <div style="display:flex; justify-content:space-around; text-align:center;">
+                                    <div><div style="font-size:10px; color:#94a3b8;">最安</div><div style="font-weight:bold;">¥${res.y_history.min.toLocaleString()}</div></div>
+                                    <div style="border-left:1px solid #334155;"></div>
+                                    <div><div style="font-size:10px; color:var(--accent);">中央値</div><div style="font-weight:bold; color:var(--accent);">¥${res.y_history.median.toLocaleString()}</div></div>
+                                    <div style="border-left:1px solid #334155;"></div>
+                                    <div><div style="font-size:10px; color:#94a3b8;">最高</div><div style="font-weight:bold;">¥${res.y_history.max.toLocaleString()}</div></div>
+                                </div>
                             </div>
-                            <div class="yahoo-stat"><div class="label">最安</div><div class="val">¥${res.y_history.min.toLocaleString()}</div></div>
-                            <div class="yahoo-stat"><div class="label">平均</div><div class="val">¥${res.y_history.avg.toLocaleString()}</div></div>
-                            <div class="yahoo-stat"><div class="label">最高</div><div class="val">¥${res.y_history.max.toLocaleString()}</div></div>
-                        </div>
-                    ` : '<div class="yahoo-history-box" style="opacity:0.5;">ヤフオク履歴 取得中...</div>';
+                        `;
+                    }
 
                     const cards = res.items.map(it => {
                         const titleEscaped = (it.title || 'No Title').replace(/'/g, "\\\\'");
@@ -594,7 +612,13 @@ def index():
                                 <div style="font-size:24px; color:#475569; font-weight:bold;">−</div>
                                 <div class="stat-box">
                                     <div class="stat-label">仕入れ値</div>
-                                    <div class="stat-value purchase-price-${res.idx}" style="color:var(--accent);">-</div>
+                                    <div style="display:flex; align-items:center; gap:2px; color:var(--accent);">
+                                        <span>¥</span>
+                                        <input type="number" class="purchase-input-${res.idx}" 
+                                               value="${res.selected_price || 0}" 
+                                               oninput="recalc(${res.idx}, ${ebayPrice}, ${Math.round((res.fees || 0) + (res.shipping || 0))})"
+                                               style="background:transparent; border:none; border-bottom:1px solid var(--accent); color:var(--accent); font-size:18px; font-weight:bold; width:80px; text-align:center; outline:none;">
+                                    </div>
                                 </div>
                                 <div style="font-size:24px; color:#475569; font-weight:bold;">＝</div>
                                 <div class="profit-highlight" style="margin:0; min-width:180px;">
@@ -630,33 +654,61 @@ def index():
             el.parentNode.querySelectorAll('.item-card').forEach(x => x.classList.remove('selected'));
             el.classList.add('selected');
 
-            const profit = e - (f + s) - p;
-            const margin = e > 0 ? (profit / e) * 100 : 0;
+            // Set the value in the editable input box
+            const input = document.querySelector('.purchase-input-' + idx);
+            if (input) input.value = p;
 
-            document.querySelector('.purchase-price-' + idx).innerText = '¥' + p.toLocaleString();
-            const profitEl = document.querySelector('.profit-val-' + idx);
-            profitEl.innerText = '¥' + Math.round(profit).toLocaleString();
-            profitEl.style.color = profit > 0 ? 'var(--success)' : 'var(--danger)';
-            
-            document.querySelector('.margin-val-' + idx).innerText = 'ROI: ' + Math.round(margin) + '%';
+            recalc(idx, e, f + s);
 
             const aibox = document.getElementById('ai-' + idx);
-            aibox.innerHTML = '<span class="pulse" style="color:var(--accent);">【AIプロ判定】 解析中...</span>';
+            aibox.innerHTML = '<span class="pulse" style="color:var(--accent);">【AI画像判定】 解析中...</span>';
 
             try {
+                const itemData = JSON.parse(el.dataset.fullInfo);
                 const r = await fetch('/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ebay_title: e_title, domestic_title: d_title })
+                    body: JSON.stringify({ 
+                        ebay_title: e_title, 
+                        domestic_title: d_title,
+                        ebay_img: itemData.ebay_img,
+                        domestic_img: el.querySelector('img').src,
+                        domestic_url: itemData.domestic_url
+                    })
                 });
                 const d = await r.json();
                 if (d.success) {
-                    aibox.innerHTML = `<b>【AIプロ判定】 一致度: ${d.result.match_score}%</b><br>${d.result.reason}`;
+                    const score = d.result.match_score;
+                    let color = 'var(--danger)';
+                    if (score >= 80) color = 'var(--success)';
+                    else if (score >= 50) color = 'var(--warning)';
+
+                    aibox.innerHTML = `<b style="color:${color}">【AI画像判定】 一致度: ${score}%</b><br>${d.result.reason}`;
                 } else {
                     aibox.innerText = '判定エラー';
                 }
             } catch (e) {
                 aibox.innerText = '通信エラー';
+            }
+        }
+
+        function recalc(idx, ebayPrice, totalFees) {
+            const input = document.querySelector('.purchase-input-' + idx);
+            if (!input) return;
+            
+            const p = parseInt(input.value) || 0;
+            const profit = ebayPrice - totalFees - p;
+            const margin = ebayPrice > 0 ? (profit / ebayPrice) * 100 : 0;
+
+            const profitEl = document.querySelector('.profit-val-' + idx);
+            if (profitEl) {
+                profitEl.innerText = '¥' + Math.round(profit).toLocaleString();
+                profitEl.style.color = profit > 0 ? 'var(--success)' : 'var(--danger)';
+            }
+            
+            const marginEl = document.querySelector('.margin-val-' + idx);
+            if (marginEl) {
+                marginEl.innerText = 'ROI: ' + Math.round(margin) + '%';
             }
         }
 
@@ -666,6 +718,20 @@ def index():
             if (!selected) return alert('アイテムが選択されていません');
             
             const itemData = JSON.parse(selected.dataset.fullInfo);
+            
+            // Override price with manual input value
+            const input = document.querySelector('.purchase-input-' + idx);
+            if (input) {
+                const manualPrice = parseInt(input.value) || 0;
+                itemData.domestic_price = manualPrice;
+                // Also update profit and ROI based on manual price for the spreadsheet
+                const ebayPriceJpy = itemData.ebay_price_jpy || 0;
+                const fees = itemData.ebay_fees || 0;
+                const shipping = itemData.shipping || 0;
+                itemData.profit = Math.round(ebayPriceJpy - (fees + shipping) - manualPrice);
+                itemData.roi = ebayPriceJpy > 0 ? Math.round((itemData.profit / ebayPriceJpy) * 100) : 0;
+            }
+
             const btn = div.querySelector('.save-btn');
             await sendToGAS([itemData], btn);
         }
@@ -675,7 +741,19 @@ def index():
             document.querySelectorAll('.product-card').forEach(div => {
                 const selected = div.querySelector('.item-card.selected');
                 if (selected) {
-                    itemsToSave.push(JSON.parse(selected.dataset.fullInfo));
+                    const itemData = JSON.parse(selected.dataset.fullInfo);
+                    const idx = itemData.idx;
+                    const input = document.querySelector('.purchase-input-' + idx);
+                    if (input) {
+                        const manualPrice = parseInt(input.value) || 0;
+                        itemData.domestic_price = manualPrice;
+                        const ebayPriceJpy = itemData.ebay_price_jpy || 0;
+                        const fees = itemData.ebay_fees || 0;
+                        const shipping = itemData.shipping || 0;
+                        itemData.profit = Math.round(ebayPriceJpy - (fees + shipping) - manualPrice);
+                        itemData.roi = ebayPriceJpy > 0 ? Math.round((itemData.profit / ebayPriceJpy) * 100) : 0;
+                    }
+                    itemsToSave.push(itemData);
                 }
             });
             
@@ -721,29 +799,77 @@ def index():
 def get_data():
     return jsonify({'results': RESEARCH_RESULTS, 'finished': IS_FINISHED})
 
+def get_item_description(url):
+    try:
+        # シンプルなリクエストで説明文の抽出を試みる
+        # (JavaScriptが必要な場合はさらに工夫が必要ですが、まずはメタタグや構造から試行)
+        r = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+        if r.status_code == 200:
+            # メルカリやヤフオクの構造に合わせて、説明文らしき場所を正規表現で探す
+            # メルカリ: "description":"..."  ヤフオク: <div class="ProductExplanation__commentText">
+            text = r.text
+            # 簡易的な抽出（サイトごとの詳細なパースは後ほど最適化）
+            desc_match = re.search(r'"description":"(.*?)"', text)
+            if desc_match:
+                return desc_match.group(1).encode().decode('unicode_escape')
+            
+            # HTMLタグを無視してテキストを抽出する簡易ロジック
+            clean_text = re.sub(r'<.*?>', '', text)
+            return clean_text[:2000] # 長すぎる場合はカット
+    except: pass
+    return "説明文を取得できませんでした"
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
         d = request.json
-        p = f"""プロのトレカ鑑定士として、以下の2つの商品が「同一のカード種別」であるかを厳格に判定してください。
+        ebay_title = d.get('ebay_title', '')
+        domestic_title = d.get('domestic_title', '')
+        ebay_img = d.get('ebay_img')
+        domestic_img = d.get('domestic_img')
+        domestic_url = d.get('domestic_url')
+
+        description = ""
+        if domestic_url:
+            description = get_item_description(domestic_url)
+
+        prompt_text = f"""プロのトレカ鑑定士として、以下の情報を比較・鑑定してください。
         
-        [eBay商品名]: {d['ebay_title']}
-        [国内商品名]: {d['domestic_title']}
+        [画像1 (左)]: eBayの出品画像（基準）
+        [画像2 (右)]: 国内サイトの出品画像（判定対象）
         
-        [判定基準]
-        1. ポケモン名が一致しているか。
-        2. 型番・コレクター番号（例: 004/PPP, 110/080）が一致しているか。これが一致していればほぼ同一です。
-        3. レアリティ（SAR, SR, SA, プロモ等）が一致しているか。
+        [eBay商品名]: {ebay_title}
+        [国内商品名]: {domestic_title}
+        [国内商品説明]: {description[:1000]}
         
-        [重要ルール]
-        - 型番（番号/記号）が一致している場合は、一致度(match_score)を必ず「90%以上」にしてください。
-        - 言語の違い（日本語/英語）は同一カードとして扱い、減点しないでください。
+        [鑑定手順]
+        1. 2枚の画像が「全く同じイラスト・カード種別」であるか確認してください。
+        2. **重要：商品説明文(国内商品説明)の中に、「観賞用」「展示用」「レプリカ」「海外製」「プロキシ」「replica」といった、非正規品であることを示す文言がないか厳格にチェックしてください。**
+        3. 画像から、正規品とは異なる特徴（色味、ロゴ、加工）がないか確認してください。
+        
+        [判定ルール]
+        - **商品説明に「観賞用」「展示用」等の記述がある場合は、画像が本物に見えても一致度を必ず「0」にしてください。**
+        - 日本語版と英語版は同一カードとして扱います。
         
         [出力形式]
-        JSON形式で {{"match_score": 0-100の数値, "reason": "日本語での簡潔な理由"}} を返してください。"""
-        r = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": p}], response_format={"type": "json_object"})
+        JSON形式で {{"match_score": 0-100, "reason": "鑑定結果の理由。特に説明文にレプリカの記述があった場合はそれを明記してください。"}} を返してください。"""
+
+        # 画像を含むメッセージ構成
+        content = [{"type": "text", "text": prompt_text}]
+        if ebay_img:
+            content.append({"type": "image_url", "image_url": {"url": ebay_img}})
+        if domestic_img:
+            content.append({"type": "image_url", "image_url": {"url": domestic_img}})
+
+        r = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": content}],
+            response_format={"type": "json_object"}
+        )
         return jsonify({'success': True, 'result': json.loads(r.choices[0].message.content)})
-    except: return jsonify({'success': False})
+    except Exception as e:
+        print(f"AI Analysis Error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/save', methods=['POST'])
 def save_to_sheet():
