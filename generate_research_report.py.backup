@@ -1,0 +1,220 @@
+import asyncio, os, re, requests, unicodedata, urllib.parse
+from datetime import datetime
+from playwright.async_api import async_playwright
+from dotenv import load_dotenv
+import pandas as pd
+import webbrowser
+import time
+import json
+import threading
+from flask import Flask, request, jsonify, make_response
+from flask_cors import CORS
+from openai import OpenAI
+
+# 🏆 V15.1: カタログページ完全排除版 (No Catalog Hub)
+# ヤフーフリマの「製品カタログ(/product/)」を排除し、個別の出品物(/item/)のみを対象に。
+
+load_dotenv()
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+RESEARCH_RESULTS = []
+IS_FINISHED = False
+
+def parse_currency(value):
+    if pd.isna(value): return 0.0
+    v = re.sub(r'[^\d.]', '', str(value))
+    try: return float(v)
+    except: return 0.0
+
+def get_exchange_rate():
+    try:
+        r = requests.get('https://api.exchangerate-api.com/v4/latest/USD', timeout=10)
+        return r.json()['rates']['JPY']
+    except: return 157.50
+
+def get_ebay_token():
+    try:
+        r = requests.post('https://api.ebay.com/identity/v1/oauth2/token', 
+                          auth=(os.getenv('EBAY_REST_CLIENT_ID'), os.getenv('EBAY_REST_CLIENT_SECRET')), 
+                          data={'grant_type': 'client_credentials', 'scope': 'https://api.ebay.com/oauth/api_scope'}, timeout=10)
+        return r.json().get('access_token')
+    except: return None
+
+async def get_ebay_image(token, title):
+    if not token: return 'https://via.placeholder.com/300'
+    try:
+        url = f"https://api.ebay.com/buy/browse/v1/item_summary/search?q={urllib.parse.quote(title)}&limit=1"
+        r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if 'itemSummaries' in data and data['itemSummaries']:
+                return data['itemSummaries'][0].get('image', {}).get('imageUrl', 'https://via.placeholder.com/300')
+    except: pass
+    return 'https://via.placeholder.com/300'
+
+def extract_keywords(title):
+    kw = []
+    t = unicodedata.normalize('NFKD', title).lower()
+    mapping = {'manaphy':'マナフィ','charizard':'リザードン','pikachu':'ピカチュウ','blastoise':'カメックス','venusaur':'フシギバナ','gengar':'ゲンガー','articuno':'フリーザー'}
+    for en, ja in mapping.items():
+        if en in t: kw.append(ja); break
+    if 'sar' in t: kw.append('SAR')
+    m = re.search(r'(\d+/[A-Z0-9]+)', title.upper())
+    if m: kw.append(m.group(1))
+    return kw
+
+async def search_mercari(page, kw):
+    if not kw: return []
+    query = ' '.join(kw)
+    try:
+        url = f'https://jp.mercari.com/search?keyword={urllib.parse.quote(query, safe="")}&status=on_sale'
+        await page.goto(url, timeout=20000)
+        await page.wait_for_timeout(1500)
+        items = await page.locator('a[href^="/item/m"]').all()
+        res = []
+        for it in items[:15]:
+            try:
+                d = await it.evaluate('el => ({title:el.ariaLabel||"", price:el.innerText, href:el.href, img:el.querySelector("img")?.src, html:el.innerHTML})')
+                if any(x in d['price'] or x in d['title'] or x in d['html'] for x in ["入札", "オークション", "現在", "残り", "〜"]): continue
+                m = re.search(r'¥\s*([\d,]+)', d['price'])
+                if m: res.append({'price':int(m.group(1).replace(',','')), 'title':d['title'], 'url':d['href'], 'image':d['img'], 'site':'メルカリ'})
+            except: continue
+        return res[:5]
+    except: return []
+
+async def search_yahoo(page, kw):
+    if not kw: return []
+    query = ' '.join(kw)
+    try:
+        url = f"https://paypayfleamarket.yahoo.co.jp/search/{urllib.parse.quote(query, safe='')}?open=1"
+        await page.goto(url, timeout=20000)
+        await page.wait_for_timeout(2000)
+        # 【重要】/product/ はカタログページのため排除し、/item/ のみを取得
+        items = await page.locator('a[href^="/item/"]').all()
+        res = []
+        for it in items[:15]:
+            try:
+                d = await it.evaluate("""el => {
+                    const img = el.querySelector('img');
+                    return {
+                        title: el.innerText.trim().split('\\n')[0] || (img ? img.alt : ""),
+                        price: el.innerText,
+                        href: el.getAttribute('href'),
+                        img: img ? img.src : "",
+                        html: el.innerHTML
+                    }
+                }""")
+                if any(x in d['price'] or x in d['html'] for x in ["入札", "オークション", "現在", "残り", "〜"]): continue
+                href = d['href']
+                if href:
+                    if href.startswith('/'): href = "https://paypayfleamarket.yahoo.co.jp" + href
+                    m = re.search(r'([\d,]+)', d['price'].replace(',',''))
+                    if m: res.append({'price':int(m.group(1)), 'title':d['title'] or "ヤフーフリマ商品", 'url':href, 'image':d['img'], 'site':'ヤフーフリマ'})
+            except: continue
+        return res[:5]
+    except: return []
+
+async def search_hardoff(page, kw):
+    if not kw: return []
+    query = ' '.join(kw)
+    try:
+        url = f'https://netmall.hardoff.co.jp/search/?q={urllib.parse.quote("ポケモンカード " + query)}'
+        await page.goto(url, timeout=20000)
+        await page.wait_for_timeout(1500)
+        items = await page.locator('div.item, .product-card, div:has(> a[href*="/product/"])').all()
+        res = []
+        for it in items[:5]:
+            try:
+                data = await it.evaluate("""el => {
+                    const link = el.querySelector('a[href*="/product/"]');
+                    const text = el.innerText;
+                    const p = text.match(/[\\d,]+/g);
+                    return { title: text.split('\\n')[0], price: p?p[p.length-1]:"0", href: link?link.href:"", img: el.querySelector('img')?el.querySelector('img').src:"" }
+                }""")
+                if data['href'] and int(data['price'].replace(',','')) > 0:
+                    res.append({'price':int(data['price'].replace(',','')), 'title':data['title'], 'url':data['href'], 'image':data['img'], 'site':'ハードオフ'})
+            except: continue
+        return res
+    except: return []
+
+async def main_process():
+    global IS_FINISHED
+    rate = get_exchange_rate()
+    ebay_token = get_ebay_token()
+    sheet_id = os.getenv('GOOGLE_SHEETS_ID')
+    df = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        context = await browser.new_context()
+        page = await context.new_page()
+        for idx, row in df.iterrows():
+            if idx >= 10: break
+            try:
+                title = str(row.get('ebay_title', 'Unknown'))
+                usd = parse_currency(row.get('avg_price_usd', 0))
+                kw = extract_keywords(title)
+                print(f"🔍 [{idx+1}/10] {title} ...")
+                
+                ebay_img = await get_ebay_image(ebay_token, title)
+                m_res = await search_mercari(page, kw)
+                y_res = await search_yahoo(page, kw)
+                h_res = await search_hardoff(page, kw)
+                
+                RESEARCH_RESULTS.append({
+                    'idx': idx,
+                    'ebay_title': title,
+                    'ebay_img': ebay_img,
+                    'ebay_price_jpy': usd * rate,
+                    'fees': (usd * rate * 0.1135),
+                    'shipping': 1500,
+                    'items': m_res + y_res + h_res,
+                    'keywords': kw
+                })
+            except Exception as e:
+                print(f"❌ Error: {e}")
+        await browser.close()
+    IS_FINISHED = True
+
+app = Flask(__name__)
+CORS(app)
+
+@app.route('/')
+def index():
+    return """<!DOCTYPE html><html><head><meta charset="UTF-8"><title>eBay Research V15.1</title><style>:root { --accent: #6366f1; --bg: #020617; --card: #1e293b; --text: #f8fafc; } body { font-family: sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin:0; } header { background: #1e1b4b; padding: 30px; border-radius: 20px; text-align: center; border: 1px solid var(--accent); margin-bottom: 30px; } .product-card { background: var(--card); border-radius: 24px; padding: 25px; margin-bottom: 40px; border: 1px solid #334155; } .calc-panel { background: #000; padding: 20px; border-radius: 15px; display: flex; justify-content: space-around; border: 1px solid var(--accent); } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; margin: 20px 0; } .item-card { border: 1px solid #334155; border-radius: 12px; padding: 10px; background: #0f172a; cursor: pointer; } .item-card.selected { border-color: var(--accent); background: #1e1b4b; } .ai-box { background: #1e1b4b; padding: 15px; border-radius: 12px; margin-top: 15px; border-left: 4px solid var(--accent); font-size: 13px; line-height: 1.5; } .profit-badge { display: flex; align-items: baseline; gap: 10px; }</style></head><body><header><h1>🌌 eBay Research: V15.1 (No Hub)</h1><p id="status">準備中...</p></header><div id="container"></div><script>async function update(){const r=await fetch('/data');const data=await r.json();const container=document.getElementById('container');document.getElementById('status').innerText=data.finished?'✅ 完了':'⏳ 進行中 ('+data.results.length+'件完了)';data.results.forEach(res=>{if(document.getElementById('prod-'+res.idx))return;const div=document.createElement('div');div.className='product-card';div.id='prod-'+res.idx;const cards=res.items.map(it=>`<div class="item-card" onclick="selectItem(this,${it.price},${res.ebay_price_jpy},${res.fees},${res.shipping},${res.idx},'${res.ebay_title}','${it.title.replace(/'/g,"\\\\'")}')"><img src="${it.image}" style="width:100%;height:100px;object-fit:contain;"><div class="title" style="font-size:10px;height:24px;overflow:hidden;">${it.title}</div><div style="color:var(--accent);font-weight:bold;">¥${it.price.toLocaleString()}</div><p style="font-size:9px;color:#94a3b8;">${it.site}</p><a href="${it.url}" target="_blank" onclick="event.stopPropagation()">詳細</a></div>`).join('');div.innerHTML=`<div style="display:flex;gap:20px;"><img src="${res.ebay_img}" style="width:120px;height:120px;object-fit:contain;border-radius:10px;background:#fff;"><div><h2 style="margin:0;">${res.ebay_title}</h2><div style="background:var(--accent);display:inline-block;padding:8px 20px;border-radius:20px;font-weight:bold;margin-top:10px;">eBay売価: ¥${Math.round(res.ebay_price_jpy).toLocaleString()}</div><div class="ai-box" id="ai-${res.idx}">アイテムを選択してプロ判定を開始</div></div></div><div class="grid">${cards}</div><div class="calc-panel"><div><div style="font-size:10px;">① eBay販売価格</div><div style="font-size:20px;font-weight:bold;">¥${Math.round(res.ebay_price_jpy).toLocaleString()}</div></div><div style="font-size:24px;">−</div><div><div style="font-size:10px;">② 手数料+配送料</div><div style="font-size:20px;font-weight:bold;">¥${Math.round(res.fees+res.shipping).toLocaleString()}</div></div><div style="font-size:24px;">−</div><div><div style="font-size:10px;">③ 仕入れ値</div><div class="purchase-price-${res.idx}" style="font-size:20px;font-weight:bold;color:var(--accent);">-</div></div><div style="font-size:24px;">＝</div><div class="profit-badge"><div><div style="font-size:10px;">利益</div><div class="profit-val-${res.idx}" style="font-size:20px;font-weight:bold;color:#22c55e;">-</div></div><div class="margin-val-${res.idx}" style="font-size:14px;color:#22c55e;font-weight:bold;"></div></div></div>`;container.appendChild(div);const first=div.querySelector('.item-card');if(first)first.click();});if(!data.finished)setTimeout(update,3000);}async function selectItem(el,p,e,f,s,idx,e_title,d_title){el.parentNode.querySelectorAll('.item-card').forEach(x=>x.classList.remove('selected'));el.classList.add('selected');const profit=e-(f+s)-p;const margin=(profit/e)*100;document.querySelector('.purchase-price-'+idx).innerText='¥'+p.toLocaleString();document.querySelector('.profit-val-'+idx).innerText='¥'+Math.round(profit).toLocaleString();document.querySelector('.margin-val-'+idx).innerText='(利益率: '+Math.round(margin)+'%)';const aibox=document.getElementById('ai-'+idx);aibox.innerText='🔍 AI判定中...';const r=await fetch('/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ebay_title:e_title,domestic_title:d_title})});const d=await r.json();if(d.success)aibox.innerHTML='<b>【AIプロ判定】 一致度: '+d.result.match_score+'%</b><br>'+d.result.reason;else aibox.innerText='判定エラー';}update();</script></body></html>"""
+
+@app.route('/data')
+def get_data():
+    return jsonify({'results': RESEARCH_RESULTS, 'finished': IS_FINISHED})
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    try:
+        d = request.json
+        p = f"""プロのトレカ鑑定士として、以下の2つの商品が「同一のカード種別」であるかを厳格に判定してください。
+        
+        [eBay商品名]: {d['ebay_title']}
+        [国内商品名]: {d['domestic_title']}
+        
+        [判定基準]
+        1. ポケモン名が一致しているか。
+        2. 型番・コレクター番号（例: 004/PPP, 110/080）が一致しているか。これが一致していればほぼ同一です。
+        3. レアリティ（SAR, SR, SA, プロモ等）が一致しているか。
+        
+        [重要ルール]
+        - 型番（番号/記号）が一致している場合は、一致度(match_score)を必ず「90%以上」にしてください。
+        - 言語の違い（日本語/英語）は同一カードとして扱い、減点しないでください。
+        
+        [出力形式]
+        JSON形式で {{"match_score": 0-100の数値, "reason": "日本語での簡潔な理由"}} を返してください。"""
+        r = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": p}], response_format={"type": "json_object"})
+        return jsonify({'success': True, 'result': json.loads(r.choices[0].message.content)})
+    except: return jsonify({'success': False})
+
+if __name__ == '__main__':
+    threading.Thread(target=lambda: app.run(port=5009, debug=False, use_reloader=False), daemon=True).start()
+    time.sleep(1)
+    webbrowser.open("http://127.0.0.1:5009")
+    asyncio.run(main_process())
+    while True: time.sleep(1)
