@@ -41,6 +41,19 @@ def get_ebay_token():
         return r.json().get('access_token')
     except: return None
 
+def clean_ebay_id(id_val):
+    if not id_val or pd.isna(id_val): return ""
+    s = str(id_val).strip()
+    # v1|123456789|0 形式の抽出
+    match = re.search(r'v1\|(\d+)\|0', s)
+    if match: return match.group(1)
+    # 指数表記やフロート形式の修正
+    try:
+        if 'e+' in s.lower() or '.' in s:
+            return "{:.0f}".format(float(s))
+    except: pass
+    return s.replace('.0', '')
+
 async def fetch_yahoo_auction_history(search_query, browser):
     try:
         if isinstance(search_query, list):
@@ -85,17 +98,42 @@ async def fetch_yahoo_auction_history(search_query, browser):
     return None
 
 
-async def get_ebay_image(token, title):
-    if not token: return 'https://via.placeholder.com/300'
+async def get_ebay_item_info(token, title, item_id=None):
+    if not token: return {'img': 'https://via.placeholder.com/300', 'url': 'https://www.ebay.com', 'title': title, 'price': None}
     try:
+        # 1. IDがある場合は、その商品の詳細を直接取得
+        if item_id:
+            full_id = f"v1|{item_id}|0" if str(item_id).isdigit() else str(item_id)
+            url = f"https://api.ebay.com/buy/browse/v1/item/{full_id}"
+            r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                price_data = data.get('price', {})
+                return {
+                    'img': data.get('image', {}).get('imageUrl', 'https://via.placeholder.com/300'),
+                    'url': data.get('itemWebUrl', f"https://www.ebay.com/itm/{item_id}"),
+                    'title': data.get('title', title),
+                    'price': float(price_data.get('value', 0)) if price_data.get('value') else None,
+                    'id': clean_ebay_id(data.get('itemId'))
+                }
+
+        # 2. IDがない、または直接取得に失敗した場合は検索
         url = f"https://api.ebay.com/buy/browse/v1/item_summary/search?q={urllib.parse.quote(title)}&limit=1"
         r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if 'itemSummaries' in data and data['itemSummaries']:
-                return data['itemSummaries'][0].get('image', {}).get('imageUrl', 'https://via.placeholder.com/300')
+                item = data['itemSummaries'][0]
+                price_data = item.get('price', {})
+                return {
+                    'img': item.get('image', {}).get('imageUrl', 'https://via.placeholder.com/300'),
+                    'url': item.get('itemWebUrl', 'https://www.ebay.com'),
+                    'title': item.get('title', title),
+                    'price': float(price_data.get('value', 0)) if price_data.get('value') else None,
+                    'id': clean_ebay_id(item.get('itemId'))
+                }
     except: pass
-    return 'https://via.placeholder.com/300'
+    return {'img': 'https://via.placeholder.com/300', 'url': 'https://www.ebay.com', 'title': title, 'price': None}
 
 def extract_keywords(title):
     kw = []
@@ -257,28 +295,49 @@ async def main_process():
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context()
         page = await context.new_page()
+        print(f"  [DEBUG] Spreadsheet Columns: {df.columns.tolist()}")
+        id_col = next((c for c in df.columns if c.lower() in ['ebay_item_id', 'item_id', 'ebay_id', 'itemid', 'id', '商品id']), None)
+        title_col = next((c for c in df.columns if c.lower() in ['ebay_title', 'title', '商品名']), 'ebay_title')
+        price_col = next((c for c in df.columns if c.lower() in ['avg_price_usd', 'price', 'ebay価格(usd)']), 'avg_price_usd')
+        status_col = next((c for c in df.columns if c.lower() in ['status', 'ステータス', 'state']), None)
+
         for idx, row in df.iterrows():
             if idx >= 10: break
             try:
-                title = str(row.get('ebay_title', 'Unknown'))
-                usd = parse_currency(row.get('avg_price_usd', 0))
-                kw = extract_keywords(title)
-                print(f"[SEARCH] [{idx+1}/10] {title} ...")
+                title = str(row.get(title_col, 'Unknown'))
                 
-                ebay_img = await get_ebay_image(ebay_token, title)
+                item_id = clean_ebay_id(row.get(id_col))
+                
+                # スプシからの予備価格とステータス
+                usd_sheet = parse_currency(row.get(price_col, 0))
+                status_val = str(row.get(status_col, '')) if status_col else ''
+                
+                kw = extract_keywords(title)
+                print(f"[SEARCH] [{idx+1}/10] {title} (ID: {item_id}, Status: {status_val})")
+                
+                ebay_data = await get_ebay_item_info(ebay_token, title, item_id)
+                
+                # eBayからの最新データがあればそれを優先、なければスプシ価格を使用
+                usd = ebay_data.get('price') if ebay_data.get('price') else usd_sheet
+                # IDの決定: スプシから取得したIDがあればそれを優先(取得したままの値)
+                final_id = item_id if item_id else (ebay_data.get('id') or '')
                 
                 # [NEW] リアルタイム更新のために空のオブジェクトを先に追加
                 res_obj = {
                     'idx': idx,
-                    'ebay_title': title,
-                    'ebay_img': ebay_img,
+                    'ebay_title': ebay_data['title'],
+                    'ebay_img': ebay_data['img'],
+                    'ebay_url': ebay_data['url'],
+                    'ebay_item_id': final_id,
+                    'status': status_val,
                     'ebay_price_usd': usd,
                     'ebay_price_jpy': usd * rate,
                     'fees': (usd * rate * 0.1135),
                     'shipping': 1500,
                     'items': [],
                     'keywords': kw,
-                    'y_history': None
+                    'y_history': None,
+                    'searching': False
                 }
                 RESEARCH_RESULTS.append(res_obj)
 
@@ -547,29 +606,25 @@ def index():
                         `;
                     }
 
-                    const cards = res.items.map(it => {
+                    let marketHtml = '';
+                    if (res.searching) {
+                        marketHtml = '<div style="grid-column: 1 / -1; text-align:center; padding:60px; color:var(--accent); font-weight:bold; font-size:1.2rem;" class="pulse">🔍 指定されたキーワードで再検索中...</div>';
+                    } else {
+                        const cards = res.items.map(it => {
                         const titleEscaped = (it.title || 'No Title').replace(/'/g, "\\\\'");
                         const ebayTitleEscaped = (res.ebay_title || '').replace(/'/g, "\\\\'");
                         const img = it.image || 'https://via.placeholder.com/150?text=No+Image';
                         
-                        const fullInfo = JSON.stringify({
-                            ebay_title: res.ebay_title,
-                            ebay_price_usd: res.ebay_price_usd,
-                            ebay_price_jpy: Math.round(res.ebay_price_jpy),
-                            domestic_title: it.title,
-                            domestic_price: it.price,
-                            domestic_site: it.site,
-                            domestic_url: it.url,
-                            ebay_fees: Math.round(res.fees),
-                            shipping: res.shipping,
-                            profit: Math.round(res.ebay_price_jpy - (res.fees + res.shipping) - it.price),
-                            roi: Math.round(((res.ebay_price_jpy - (res.fees + res.shipping) - it.price) / res.ebay_price_jpy) * 100),
-                            ebay_img: res.ebay_img
-                        }).replace(/"/g, '&quot;');
+                        if (!window.productData) window.productData = {};
+                        const dataKey = `key-${res.idx}-${it.site}-${it.price}`;
+                        window.productData[dataKey] = {
+                            res: res,
+                            item: it
+                        };
 
                         return `
                             <div class="item-card" 
-                                 data-full-info="${fullInfo}"
+                                 data-key="${dataKey}"
                                  onclick="selectItem(this, ${it.price}, ${res.ebay_price_jpy || 0}, ${res.fees || 0}, ${res.shipping || 0}, ${res.idx}, '${ebayTitleEscaped}', '${titleEscaped}')">
                                 <img src="${img}" class="item-img">
                                 <div class="item-title" title="${it.title || ''}">${it.title || 'No Title'}</div>
@@ -580,22 +635,44 @@ def index():
                                 <div class="item-site">${it.site}</div>
                             </div>
                         `;
-                    }).join('');
+                        }).join('');
+                        marketHtml = historyHtml + cards;
+                    }
 
                     const ebayPrice = Math.round(res.ebay_price_jpy || 0);
+                    
+                    // 手入力されたキーワードを優先的に保持
+                    if (!window.manualKeywords) window.manualKeywords = {};
+                    const currentDiv = document.getElementById('prod-' + res.idx);
+                    const kwInput = currentDiv ? currentDiv.querySelector('.kw-input') : null;
+                    const isKwFocused = kwInput && document.activeElement === kwInput;
+                    
+                    // 現在の値を保持（入力中ならその値、そうでなければ記憶している値、それもなければサーバー値）
+                    if (isKwFocused) window.manualKeywords[res.idx] = kwInput.value;
+                    const currentKwValue = window.manualKeywords[res.idx] !== undefined ? window.manualKeywords[res.idx] : (res.keywords ? res.keywords.join(' ') : '');
+
                     const content = `
                         <div class="main-info">
                             <img src="${res.ebay_img}" class="ebay-img">
                             <div class="product-details">
-                                <h2 style="color:#fff; text-shadow: 0 0 10px rgba(99,102,241,0.5);">${res.ebay_title}</h2>
-                                <div class="price-pill">eBay売価: ¥${ebayPrice.toLocaleString()}</div>
+                                <h2 style="color:#fff; text-shadow: 0 0 10px rgba(99,102,241,0.5); margin-bottom:15px;">${res.ebay_title}</h2>
+                                <div style="display:flex; gap:10px; align-items:center; margin-bottom:15px;">
+                                    <div class="price-pill">eBay売価: ¥${ebayPrice.toLocaleString()}</div>
+                                    <a href="${res.ebay_url}" target="_blank" style="text-decoration:none; background:rgba(255,255,255,0.1); color:#fff; padding:10px 15px; border-radius:50px; font-size:0.9rem; font-weight:600; border:1px solid rgba(255,255,255,0.2); transition:all 0.3s;">🔗 eBayで開く</a>
+                                    <div style="flex:1; display:flex; gap:5px; background:rgba(255,255,255,0.05); padding:5px 15px; border-radius:15px; border:1px solid rgba(255,255,255,0.1);">
+                                        <span style="font-size:12px; color:var(--text-dim); align-self:center;">🔍 検索ワード:</span>
+                                        <input type="text" class="kw-input" value="${currentKwValue}" 
+                                               oninput="window.manualKeywords[${res.idx}] = this.value"
+                                               style="flex:1; background:transparent; border:none; color:#fff; font-size:14px; outline:none; padding:5px;">
+                                        <button onclick="researchItem(${res.idx})" style="background:var(--accent); color:white; border:none; padding:5px 15px; border-radius:10px; font-size:12px; cursor:pointer; font-weight:600;">再検索</button>
+                                    </div>
+                                </div>
                                 <div class="ai-analysis" id="ai-${res.idx}">アイテムを選択してAI判定を開始</div>
                             </div>
                         </div>
 
                         <div class="market-grid">
-                            ${historyHtml}
-                            ${cards}
+                            ${marketHtml}
                         </div>
 
                         <div class="calc-footer">
@@ -634,16 +711,26 @@ def index():
                     `;
 
                     if (div.dataset.content !== content) {
+                        const wasFocused = document.activeElement && document.activeElement.closest('#' + div.id);
+                        const selectedIdx = div.querySelector('.item-card.selected') ? Array.from(div.querySelectorAll('.item-card')).indexOf(div.querySelector('.item-card.selected')) : -1;
+                        
                         div.innerHTML = content;
                         div.dataset.content = content;
-                        if (!div.querySelector('.item-card.selected')) {
+
+                        // 選択状態を復元
+                        if (selectedIdx !== -1) {
+                            const newCards = div.querySelectorAll('.item-card');
+                            if (newCards[selectedIdx]) newCards[selectedIdx].classList.add('selected');
+                        } else {
+                            // 初回のみ自動クリック
                             const first = div.querySelector('.item-card');
                             if (first) first.click();
                         }
                     }
                 });
 
-                if (!data.finished) setTimeout(update, 3000);
+                // 最初の10件が終わっても、個別の再検索があり得るので更新を継続する
+                setTimeout(update, 3000);
             } catch (e) {
                 console.error("Update error:", e);
                 setTimeout(update, 5000);
@@ -664,16 +751,18 @@ def index():
             aibox.innerHTML = '<span class="pulse" style="color:var(--accent);">【AI画像判定】 解析中...</span>';
 
             try {
-                const itemData = JSON.parse(el.dataset.fullInfo);
+                const dataKey = el.dataset.key;
+                const info = window.productData[dataKey];
+                
                 const r = await fetch('/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         ebay_title: e_title, 
                         domestic_title: d_title,
-                        ebay_img: itemData.ebay_img,
+                        ebay_img: info.res.ebay_img,
                         domestic_img: el.querySelector('img').src,
-                        domestic_url: itemData.domestic_url
+                        domestic_url: info.item.url
                     })
                 });
                 const d = await r.json();
@@ -712,49 +801,57 @@ def index():
             }
         }
 
-        async function saveCurrentItem(idx) {
+        function getSaveData(idx) {
             const div = document.getElementById('prod-' + idx);
             const selected = div.querySelector('.item-card.selected');
-            if (!selected) return alert('アイテムが選択されていません');
+            if (!selected) return null;
             
-            const itemData = JSON.parse(selected.dataset.fullInfo);
+            const dataKey = selected.dataset.key;
+            const info = window.productData[dataKey];
+            const res = info.res;
+            const it = info.item;
             
-            // Override price with manual input value
             const input = document.querySelector('.purchase-input-' + idx);
-            if (input) {
-                const manualPrice = parseInt(input.value) || 0;
-                itemData.domestic_price = manualPrice;
-                // Also update profit and ROI based on manual price for the spreadsheet
-                const ebayPriceJpy = itemData.ebay_price_jpy || 0;
-                const fees = itemData.ebay_fees || 0;
-                const shipping = itemData.shipping || 0;
-                itemData.profit = Math.round(ebayPriceJpy - (fees + shipping) - manualPrice);
-                itemData.roi = ebayPriceJpy > 0 ? Math.round((itemData.profit / ebayPriceJpy) * 100) : 0;
-            }
+            const manualPrice = input ? (parseInt(input.value) || 0) : it.price;
+            
+            const profit = Math.round(res.ebay_price_jpy - (res.fees + res.shipping) - manualPrice);
+            const roi = res.ebay_price_jpy > 0 ? Math.round((profit / res.ebay_price_jpy) * 100) : 0;
+            
+            const dateStr = new Date().toLocaleDateString('ja-JP');
+            return {
+                "date": dateStr,
+                "ebay_title": res.ebay_title,
+                "ebay_price_usd": res.ebay_price_usd,
+                "ebay_price_jpy": Math.round(res.ebay_price_jpy),
+                "domestic_title": it.title,
+                "domestic_price": manualPrice,
+                "domestic_site": it.site,
+                "domestic_url": it.url,
+                "ebay_fees": Math.round(res.fees),
+                "shipping": res.shipping,
+                "profit": profit,
+                "roi": roi,
+                "ebay_img": res.ebay_url,    // 13列目(M): ebay_img という名前で送る必要がある
+                "ebay_item_id": res.ebay_item_id, // 14列目(N)
+                "status": res.status || ''   // 15列目(O)
+            };
+        }
 
+        async function saveCurrentItem(idx) {
+            const data = getSaveData(idx);
+            if (!data) return alert('アイテムが選択されていません');
+            
+            const div = document.getElementById('prod-' + idx);
             const btn = div.querySelector('.save-btn');
-            await sendToGAS([itemData], btn);
+            await sendToGAS([data], btn);
         }
 
         async function bulkSave() {
             const itemsToSave = [];
             document.querySelectorAll('.product-card').forEach(div => {
-                const selected = div.querySelector('.item-card.selected');
-                if (selected) {
-                    const itemData = JSON.parse(selected.dataset.fullInfo);
-                    const idx = itemData.idx;
-                    const input = document.querySelector('.purchase-input-' + idx);
-                    if (input) {
-                        const manualPrice = parseInt(input.value) || 0;
-                        itemData.domestic_price = manualPrice;
-                        const ebayPriceJpy = itemData.ebay_price_jpy || 0;
-                        const fees = itemData.ebay_fees || 0;
-                        const shipping = itemData.shipping || 0;
-                        itemData.profit = Math.round(ebayPriceJpy - (fees + shipping) - manualPrice);
-                        itemData.roi = ebayPriceJpy > 0 ? Math.round((itemData.profit / ebayPriceJpy) * 100) : 0;
-                    }
-                    itemsToSave.push(itemData);
-                }
+                const idx = div.id.replace('prod-', '');
+                const data = getSaveData(idx);
+                if (data) itemsToSave.push(data);
             });
             
             if (itemsToSave.length === 0) return alert('保存するアイテムがありません');
@@ -775,7 +872,7 @@ def index():
                     body: JSON.stringify(dataList)
                 });
                 const d = await r.json();
-                if (d.success) {
+                if (d.success || d.status === 'success') {
                     alert('✅ スプレッドシートに保存しました！');
                     btn.innerText = '✅ 保存完了';
                 } else {
@@ -790,6 +887,36 @@ def index():
             }
         }
 
+        async function researchItem(idx) {
+            const div = document.getElementById('prod-' + idx);
+            const kw = div.querySelector('.kw-input').value;
+            const btn = div.querySelector('button');
+            const originalText = btn.innerText;
+            
+            btn.innerText = '⌛...';
+            btn.disabled = true;
+
+            try {
+                const r = await fetch('/research_item', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ idx: idx, keywords: kw })
+                });
+                const d = await r.json();
+                if (d.success) {
+                    console.log('Research started for item ' + idx);
+                    update(); // 即座に画面を「再検索中」に切り替える
+                } else {
+                    alert('エラー: ' + d.error);
+                }
+            } catch (e) {
+                alert('通信エラー');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
         update();
     </script>
 </body>
@@ -797,7 +924,78 @@ def index():
 
 @app.route('/data')
 def get_data():
-    return jsonify({'results': RESEARCH_RESULTS, 'finished': IS_FINISHED})
+    searching_count = sum(1 for r in RESEARCH_RESULTS if r.get('searching'))
+    # 全体の完了状態とは別に、個別の検索が動いているかどうかも含めて返す
+    return jsonify({
+        'results': RESEARCH_RESULTS, 
+        'finished': IS_FINISHED,
+        'searching_any': searching_count > 0
+    })
+
+@app.route('/research_item', methods=['POST'])
+def research_item():
+    try:
+        data = request.json
+        idx = data.get('idx')
+        new_kw_str = data.get('keywords', '')
+        new_kw = [k.strip() for k in new_kw_str.split(' ') if k.strip()]
+        
+        # RESEARCH_RESULTSから対象を探す
+        res_obj = next((item for item in RESEARCH_RESULTS if item['idx'] == idx), None)
+        if not res_obj: return jsonify({'success': False, 'error': 'Item not found'})
+        
+        # 既存の結果をクリアし、キーワードを更新
+        res_obj['items'] = []
+        res_obj['keywords'] = new_kw
+        res_obj['y_history'] = None
+        res_obj['searching'] = True
+        
+        print(f"  [RE-SEARCH] Item {idx} -> Keywords: {new_kw}")
+        
+        # バックグラウンドで個別に再検索を実行（元の安定した順次実行を使用）
+        async def do_work():
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=False)
+                context = await browser.new_context()
+                page = await context.new_page()
+                # eBayデータの再取得（IDを固定して商品が変わらないようにする）
+                ebay_data = await get_ebay_item_info(get_ebay_token(), res_obj['ebay_title'], item_id=res_obj.get('ebay_item_id'))
+                rate = get_exchange_rate()
+                res_obj['ebay_img'] = ebay_data['img']
+                res_obj['ebay_url'] = ebay_data['url']
+                res_obj['ebay_title'] = ebay_data['title']
+                # 元のIDが空の場合のみ、新しく取得したIDをセット
+                if not res_obj.get('ebay_item_id') and ebay_data.get('id'):
+                    res_obj['ebay_item_id'] = ebay_data['id']
+                
+                if (ebay_data.get('price')):
+                    res_obj['ebay_price_usd'] = ebay_data['price']
+                    res_obj['ebay_price_jpy'] = ebay_data['price'] * rate
+                    res_obj['fees'] = (ebay_data['price'] * rate * 0.1135)
+
+                try:
+                    # メルカリ
+                    m_res = await search_mercari(page, new_kw)
+                    res_obj['items'].extend(m_res)
+                    # ヤフーフリマ
+                    y_res = await search_yahoo(page, new_kw)
+                    res_obj['items'].extend(y_res)
+                    # ハードオフ
+                    h_res = await search_hardoff(page, new_kw)
+                    res_obj['items'].extend(h_res)
+                    # ヤフオク履歴
+                    y_history = await fetch_yahoo_auction_history(new_kw, browser)
+                    res_obj['y_history'] = y_history
+                except Exception as e:
+                    print(f"  [ERR] Re-search failed: {e}")
+                finally:
+                    res_obj['searching'] = False
+                    await browser.close()
+        
+        threading.Thread(target=lambda: asyncio.run(do_work())).start()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 def get_item_description(url):
     try:
@@ -880,6 +1078,7 @@ def save_to_sheet():
         
         data = request.json # List of items
         r = requests.post(gas_url, json=data, timeout=15)
+        print(f"  [GAS] Status: {r.status_code}, Response: {r.text}")
         return jsonify(r.json())
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
