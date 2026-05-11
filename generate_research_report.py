@@ -20,6 +20,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 RESEARCH_RESULTS = []
 IS_FINISHED = False
+CURRENT_GENRE = "ポケモンカード"
+MAIN_PROCESS_THREAD = None
 
 def parse_currency(value):
     if pd.isna(value): return 0.0
@@ -174,11 +176,53 @@ def extract_keywords(title):
         words = re.findall(r'[a-zA-Z0-9]{3,}', title)
         kw = words[:2]
         
+    kw = list(dict.fromkeys(kw))
     return kw
 
-async def search_mercari(page, kw):
+
+
+def extract_keywords_ai(title, genre):
+    """AIを使って日本のフリマサイト向けに最適な日本語キーワードを抽出する"""
+    try:
+        # 特殊な記号が含まれている場合などのためにクリーンアップ
+        clean_title = re.sub(r'[^\w\s]', ' ', title)
+        
+        prompt = f"""以下のeBayの商品名から、日本のフリマサイト（メルカリ、ヤフオク等）で検索するのに最適な「日本語のキーワード」を3〜5単語程度で抽出してください。
+        
+        ジャンル: {genre}
+        eBay商品名: {title}
+        
+        [重要ルール]
+        - **作品名やキャラクター名は、日本公式の「漢字表記（フルネーム）」を絶対に最優先してください（例: Isagi Yoichi -> 潔世一, Yoichi Isagi -> 潔世一）。**
+        - **「イサギヨイチ」のようなカタカナ表記は、漢字が不明な場合を除き禁止します。**
+        - ジャンル名も適切に日本語に変換してください（例: Figure -> フィギュア）。
+        - 出力は、最も重要な単語をスペース区切りで「キーワードのみ」返してください。
+        - 余計な説明や記号は一切不要です。"""
+        
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=50,
+            temperature=0
+        )
+        kw_str = r.choices[0].message.content.strip()
+        kw = [k.strip() for k in kw_str.split(' ') if k.strip()]
+        print(f"  [AI-KW] {title[:20]}... -> {kw}")
+        return kw
+    except Exception as e:
+        print(f"  [AI-KW-ERR] {e}")
+        # フォールバックとして元のロジックを使用
+        return extract_keywords(title)
+
+async def search_mercari(page, kw, genre="ポケモンカード", is_manual=False):
     if not kw: return []
-    query = ' '.join(kw)
+    # 重複排除
+    words = ([genre] if not is_manual else []) + kw
+    unique_words = []
+    for w in words:
+        if w not in unique_words: unique_words.append(w)
+    query = ' '.join(unique_words[:6])
+    
     try:
         url = f'https://jp.mercari.com/search?keyword={urllib.parse.quote(query, safe="")}&status=on_sale'
         await page.goto(url, timeout=20000)
@@ -191,7 +235,6 @@ async def search_mercari(page, kw):
                     const imgDiv = el.querySelector('div[aria-label]');
                     const img = el.querySelector('img');
                     let rawTitle = imgDiv ? imgDiv.getAttribute('aria-label') : (img ? img.alt : "");
-                    // 「の画像」や「のサムネイル」以降を削除し、さらに価格表示があれば削除
                     let title = rawTitle.replace(/の(画像|サムネイル).*$/, "").replace(/¥\s?[\d,]+/, "").trim();
                     return {
                         title: title,
@@ -201,9 +244,6 @@ async def search_mercari(page, kw):
                         html: el.innerHTML
                     }
                 }""")
-                if not d['title']:
-                    print(f"DEBUG: Mercari title empty for {d['href']}")
-                
                 exclude_kws = ["入札", "オークション", "現在", "残り", "〜", "盗難防止", "観賞用", "展示用", "レプリカ"]
                 if any(x in d.get('price','') or x in d.get('title','') or x in d.get('html','') for x in exclude_kws): continue
                 m = re.search(r'¥\s*([\d,]+)', d['price'])
@@ -215,54 +255,73 @@ async def search_mercari(page, kw):
         return res[:5]
     except: return []
 
-async def search_yahoo(page, kw):
+async def search_yahoo(page, kw, genre="ポケモンカード", is_manual=False):
     if not kw: return []
-    query = ' '.join(kw)
+    words = ([genre] if not is_manual else []) + kw
+    unique_words = []
+    for w in words:
+        if w not in unique_words: unique_words.append(w)
+    query = ' '.join(unique_words[:6])
     try:
         url = f"https://paypayfleamarket.yahoo.co.jp/search/{urllib.parse.quote(query, safe='')}?open=1"
-        await page.goto(url, timeout=20000)
-        await page.wait_for_timeout(2000)
-        # 【重要】/product/ はカタログページのため排除し、/item/ のみを取得
-        items = await page.locator('a[href^="/item/"]').all()
+        await page.goto(url, timeout=30000)
+        try:
+            await page.wait_for_selector('a[href*="/item/"]', timeout=10000)
+        except: pass
+        items = await page.locator('a[href*="/item/"]').all()
         res = []
         for it in items[:15]:
             try:
                 d = await it.evaluate("""el => {
                     const img = el.querySelector('img');
-                    let title = img ? img.alt : "";
-                    if (!title) {
-                        const titleEl = el.querySelector('p, span[class*="title"]');
-                        title = titleEl ? titleEl.innerText : "";
-                    }
-                    // 不要な改行や価格情報を掃除
-                    title = title.split('\\n')[0].replace(/¥\s?[\d,]+/g, '').trim();
                     return {
-                        title: title || "ヤフーフリマ商品",
-                        price: el.innerText,
-                        href: el.getAttribute('href'),
-                        img: img ? img.src : "",
-                        html: el.innerHTML
+                        title: img ? img.alt : "ヤフーフリマ商品",
+                        allText: el.innerText,
+                        href: el.href,
+                        img: img ? img.src : ""
                     }
                 }""")
-                exclude_kws = ["盗難防止", "観賞用", "展示用", "レプリカ"]
-                if any(x in d['title'] or x in d['html'] for x in exclude_kws): continue
-                href = d['href']
-                if href:
-                    if href.startswith('/'): href = "https://paypayfleamarket.yahoo.co.jp" + href
-                    m = re.search(r'([\d,]+)', d['price'].replace(',',''))
+                
+                # 事実に基づいた価格抽出
+                price_match = re.search(r'([\d,]+)\s*円', d['allText'])
+                if not price_match:
+                    price_match = re.search(r'¥\s*([\d,]+)', d['allText'])
+                
+                if price_match:
+                    price_val = int(price_match.group(1).replace(',', ''))
+                else:
+                    # 最終手段: 「円」が含まれる行の数字を全部つなげる
+                    m = re.search(r'.*円', d['allText'])
                     if m:
-                        price = int(m.group(1))
-                        if price < 100: continue
-                        res.append({'price':price, 'title':d['title'] or "ヤフーフリマ商品", 'url':href, 'image':d['img'], 'site':'ヤフーフリマ'})
-            except: continue
-        return res[:5]
-    except: return []
+                        price_val = int(re.sub(r'[^\d]', '', m.group(0)))
+                    else:
+                        continue
 
-async def search_hardoff(page, kw):
+                exclude_kws = ["盗難防止", "観賞用", "展示用", "レプリカ"]
+                if any(x in d['title'] for x in exclude_kws): continue
+                if price_val > 100:
+                    res.append({'site': 'ヤフーフリマ', 'title': d['title'], 'price': price_val, 'url': d['href'], 'image': d['img']})
+            except: continue
+        
+        if not res and len(items) > 0:
+            await page.screenshot(path="debug_yahoo_0hits.png")
+            print("  [DEBUG-Y] Items found but 0 hits after filtering. Screenshot saved.")
+            
+        return res[:5]
+    except Exception as e:
+        print(f"  [ERR-Y] {e}")
+        return []
+
+
+async def search_hardoff(page, kw, genre="ポケモンカード", is_manual=False):
     if not kw: return []
-    query = ' '.join(kw)
+    if is_manual:
+        query = ' '.join(kw)
+    else:
+        query = ' '.join([genre] + kw[:5])
+    
     try:
-        url = f'https://netmall.hardoff.co.jp/search/?q={urllib.parse.quote("ポケモンカード " + query)}'
+        url = f'https://netmall.hardoff.co.jp/search/?q={urllib.parse.quote(query)}'
         await page.goto(url, timeout=20000)
         await page.wait_for_timeout(1500)
         items = await page.locator('div.item, .product-card, div:has(> a[href*="/product/"])').all()
@@ -284,15 +343,33 @@ async def search_hardoff(page, kw):
         return res
     except: return []
 
-async def main_process():
-    global IS_FINISHED
+# ジャンル別eBay手数料率（DB）
+FEE_RATES = {
+    "ポケモンカード": 0.1135, # 旧設定
+    "フィギュア": 0.127,      # ユーザー指定: 12.7%
+    "ゲーム": 0.127,
+    "default": 0.15            # 不明なジャンルのための安全マージン
+}
+
+async def main_process(genre="ポケモンカード"):
+    global IS_FINISHED, RESEARCH_RESULTS, CURRENT_GENRE
+    CURRENT_GENRE = genre
+    IS_FINISHED = False
+    RESEARCH_RESULTS = [] # 以前の結果をクリア
+
+    # 手数料率の決定
+    fee_rate = FEE_RATES.get(genre, FEE_RATES["default"])
+    print(f"  [LOG] ジャンル: {genre}, 適用手数料率: {fee_rate*100}%")
+
     rate = get_exchange_rate()
     ebay_token = get_ebay_token()
     sheet_id = os.getenv('GOOGLE_SHEETS_ID')
     df = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0")
 
     async with async_playwright() as p:
+        print("  [DEBUG] ブラウザを起動中...")
         browser = await p.chromium.launch(headless=False)
+        print("  [DEBUG] ブラウザ起動完了")
         context = await browser.new_context()
         page = await context.new_page()
         print(f"  [DEBUG] Spreadsheet Columns: {df.columns.tolist()}")
@@ -312,10 +389,13 @@ async def main_process():
                 usd_sheet = parse_currency(row.get(price_col, 0))
                 status_val = str(row.get(status_col, '')) if status_col else ''
                 
-                kw = extract_keywords(title)
+                # AIを使って日本語キーワードを生成
+                kw = extract_keywords_ai(title, genre)
                 print(f"[SEARCH] [{idx+1}/10] {title} (ID: {item_id}, Status: {status_val})")
                 
+                print(f"  [LOG] eBay情報取得中... (ID: {item_id})")
                 ebay_data = await get_ebay_item_info(ebay_token, title, item_id)
+                print(f"  [LOG] eBay情報取得完了: {ebay_data['title'][:30]}...")
                 
                 # eBayからの最新データがあればそれを優先、なければスプシ価格を使用
                 usd = ebay_data.get('price') if ebay_data.get('price') else usd_sheet
@@ -329,10 +409,11 @@ async def main_process():
                     'ebay_img': ebay_data['img'],
                     'ebay_url': ebay_data['url'],
                     'ebay_item_id': final_id,
+                    'genre': genre,
                     'status': status_val,
                     'ebay_price_usd': usd,
                     'ebay_price_jpy': usd * rate,
-                    'fees': (usd * rate * 0.1135),
+                    'fees': (usd * rate * fee_rate),
                     'shipping': 1500,
                     'items': [],
                     'keywords': kw,
@@ -342,20 +423,28 @@ async def main_process():
                 RESEARCH_RESULTS.append(res_obj)
 
                 # 1. メルカリ
-                m_res = await search_mercari(page, kw)
+                print(f"  [LOG] メルカリ検索中... (ジャンル: {genre})")
+                m_res = await search_mercari(page, kw, genre)
                 res_obj['items'].extend(m_res)
+                print(f"  [LOG] メルカリ完了: {len(m_res)}件ヒット")
                 
                 # 2. ヤフーフリマ
-                y_res = await search_yahoo(page, kw)
+                print(f"  [LOG] ヤフーフリマ検索中...")
+                y_res = await search_yahoo(page, kw, genre)
                 res_obj['items'].extend(y_res)
+                print(f"  [LOG] ヤフーフリマ完了: {len(y_res)}件ヒット")
                 
                 # 3. ハードオフ
-                h_res = await search_hardoff(page, kw)
+                print(f"  [LOG] ハードオフ検索中...")
+                h_res = await search_hardoff(page, kw, genre)
                 res_obj['items'].extend(h_res)
+                print(f"  [LOG] ハードオフ完了: {len(h_res)}件ヒット")
                 
                 # 4. ヤフオク履歴
+                print(f"  [LOG] ヤフオク履歴取得中...")
                 y_history = await fetch_yahoo_auction_history(kw, browser)
                 res_obj['y_history'] = y_history
+                print(f"  [LOG] ヤフオク履歴完了")
                 
             except Exception as e:
                 import traceback
@@ -559,8 +648,25 @@ def index():
 <body>
     <header>
         <h1>eBay Research Edge</h1>
-        <div id="status-badge" class="pulse">Initializing...</div>
-        <div style="margin-top:20px;">
+        
+        <!-- ジャンル選択フォーム -->
+        <div id="genre-selector" style="margin-top:25px; display:flex; gap:10px; justify-content:center; align-items:center; background:rgba(255,255,255,0.05); padding:20px; border-radius:20px; border:1px solid rgba(255,255,255,0.1);">
+            <div style="text-align:left;">
+                <label style="font-size:0.8rem; color:var(--text-dim); display:block; margin-bottom:5px;">リサーチジャンルを選択</label>
+                <select id="genre-history" onchange="document.getElementById('new-genre').value = this.value" style="background:#1e293b; color:white; border:1px solid var(--accent); padding:10px; border-radius:10px; width:200px; outline:none;">
+                    <option value="ポケモンカード">ポケモンカード</option>
+                </select>
+            </div>
+            <div style="text-align:left; flex:1; max-width:300px;">
+                <label style="font-size:0.8rem; color:var(--text-dim); display:block; margin-bottom:5px;">または新規入力</label>
+                <input type="text" id="new-genre" placeholder="例: ワンピースカード" style="background:#1e293b; color:white; border:1px solid var(--accent); padding:10px; border-radius:10px; width:100%; outline:none;">
+            </div>
+            <button onclick="startResearch()" style="background:var(--accent); color:white; border:none; padding:12px 30px; border-radius:15px; font-weight:700; cursor:pointer; box-shadow:0 10px 20px var(--accent-glow); margin-top:20px;">リサーチ開始</button>
+        </div>
+
+        <div id="status-badge" style="margin-top:20px;">ジャンルを選択してリサーチを開始してください</div>
+        
+        <div id="main-actions" style="margin-top:20px; display:none;">
             <button onclick="bulkSave()" style="background:var(--success); color:white; border:none; padding:12px 30px; border-radius:30px; font-weight:700; cursor:pointer; box-shadow:0 10px 20px rgba(16,185,129,0.3); font-size:1.1rem; transition:all 0.3s;">📥 表示中の選択アイテムを一括保存</button>
         </div>
     </header>
@@ -572,11 +678,28 @@ def index():
             try {
                 const r = await fetch('/data');
                 const data = await r.json();
+                
+                // フォーカス状態を保存
+                const activeEl = document.activeElement;
+                const activeId = activeEl ? activeEl.id : null;
+                const selectionStart = (activeEl && activeEl.tagName === 'INPUT') ? activeEl.selectionStart : null;
+                const selectionEnd = (activeEl && activeEl.tagName === 'INPUT') ? activeEl.selectionEnd : null;
+
                 const container = document.getElementById('container');
                 
                 const badge = document.getElementById('status-badge');
-                badge.innerText = data.finished ? 'COMPLETED' : `RESEARCHING (${data.results.length} items found)`;
+                if (data.results.length === 0 && !data.finished && !data.searching_any) {
+                    badge.innerText = 'ジャンルを選択してリサーチを開始してください';
+                    badge.className = '';
+                    document.getElementById('main-actions').style.display = 'none';
+                    setTimeout(update, 3000); // ここで更新を継続させる
+                    return;
+                }
+                
+                document.getElementById('main-actions').style.display = 'block';
+                badge.innerText = data.finished ? `COMPLETED (${data.genre})` : `RESEARCHING ${data.genre} (${data.results.length} items found)`;
                 if (data.finished) badge.classList.remove('pulse');
+                else badge.classList.add('pulse');
 
                 data.results.forEach(res => {
                     let div = document.getElementById('prod-' + res.idx);
@@ -661,7 +784,7 @@ def index():
                                     <a href="${res.ebay_url}" target="_blank" style="text-decoration:none; background:rgba(255,255,255,0.1); color:#fff; padding:10px 15px; border-radius:50px; font-size:0.9rem; font-weight:600; border:1px solid rgba(255,255,255,0.2); transition:all 0.3s;">🔗 eBayで開く</a>
                                     <div style="flex:1; display:flex; gap:5px; background:rgba(255,255,255,0.05); padding:5px 15px; border-radius:15px; border:1px solid rgba(255,255,255,0.1);">
                                         <span style="font-size:12px; color:var(--text-dim); align-self:center;">🔍 検索ワード:</span>
-                                        <input type="text" class="kw-input" value="${currentKwValue}" 
+                                        <input type="text" id="kw-input-${res.idx}" class="kw-input kw-input-${res.idx}" value="${currentKwValue}" 
                                                oninput="window.manualKeywords[${res.idx}] = this.value"
                                                style="flex:1; background:transparent; border:none; color:#fff; font-size:14px; outline:none; padding:5px;">
                                         <button onclick="researchItem(${res.idx})" style="background:var(--accent); color:white; border:none; padding:5px 15px; border-radius:10px; font-size:12px; cursor:pointer; font-weight:600;">再検索</button>
@@ -728,6 +851,19 @@ def index():
                         }
                     }
                 });
+
+                // フォーカスを復元
+                if (activeId) {
+                    const el = document.getElementById(activeId);
+                    if (el) {
+                        el.focus();
+                        if (selectionStart !== null && selectionEnd !== null) {
+                            try {
+                                el.setSelectionRange(selectionStart, selectionEnd);
+                            } catch(e) {}
+                        }
+                    }
+                }
 
                 // 最初の10件が終わっても、個別の再検索があり得るので更新を継続する
                 setTimeout(update, 3000);
@@ -831,9 +967,10 @@ def index():
                 "shipping": res.shipping,
                 "profit": profit,
                 "roi": roi,
-                "ebay_img": res.ebay_url,    // 13列目(M): ebay_img という名前で送る必要がある
+                "ebay_img": res.ebay_url,    // 13列目(M)
                 "ebay_item_id": res.ebay_item_id, // 14列目(N)
-                "status": res.status || ''   // 15列目(O)
+                "status": res.status || '',  // 15列目(O)
+                "category": res.genre        // 追加: ジャンル情報
             };
         }
 
@@ -917,6 +1054,49 @@ def index():
             }
         }
 
+        function loadGenreHistory() {
+            const history = JSON.parse(localStorage.getItem('ebay_research_genres') || '["ポケモンカード"]');
+            const select = document.getElementById('genre-history');
+            select.innerHTML = history.map(g => `<option value="${g}">${g}</option>`).join('');
+            if (history.length > 0) document.getElementById('new-genre').value = history[0];
+        }
+
+        function saveGenreHistory(genre) {
+            let history = JSON.parse(localStorage.getItem('ebay_research_genres') || '["ポケモンカード"]');
+            if (!history.includes(genre)) {
+                history.unshift(genre);
+                history = history.slice(0, 10);
+                localStorage.setItem('ebay_research_genres', JSON.stringify(history));
+            }
+        }
+
+        async function startResearch() {
+            const genre = document.getElementById('new-genre').value.strip ? document.getElementById('new-genre').value.trim() : document.getElementById('new-genre').value;
+            if (!genre) return alert('ジャンルを入力してください');
+            
+            if (!confirm(`${genre} のリサーチを開始しますか？`)) return;
+            
+            saveGenreHistory(genre);
+            
+            try {
+                const r = await fetch('/start-search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ genre: genre })
+                });
+                const d = await r.json();
+                if (d.success) {
+                    document.getElementById('container').innerHTML = ''; // 画面クリア
+                    update();
+                } else {
+                    alert('エラー: ' + d.error);
+                }
+            } catch (e) {
+                alert('開始エラー');
+            }
+        }
+
+        loadGenreHistory();
         update();
     </script>
 </body>
@@ -929,8 +1109,25 @@ def get_data():
     return jsonify({
         'results': RESEARCH_RESULTS, 
         'finished': IS_FINISHED,
-        'searching_any': searching_count > 0
+        'searching_any': searching_count > 0,
+        'genre': CURRENT_GENRE
     })
+
+@app.route('/start-search', methods=['POST'])
+def start_search():
+    global MAIN_PROCESS_THREAD
+    try:
+        data = request.json
+        genre = data.get('genre', 'ポケモンカード')
+        
+        # すでに実行中のスレッドがあるか確認（簡易的）
+        # 本来は実行中のプロセスを停止させるなどの処理が必要だが、
+        # 今回は新規スレッドで開始させる
+        threading.Thread(target=lambda: asyncio.run(main_process(genre)), daemon=True).start()
+        
+        return jsonify({'success': True, 'genre': genre})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/research_item', methods=['POST'])
 def research_item():
@@ -971,17 +1168,19 @@ def research_item():
                 if (ebay_data.get('price')):
                     res_obj['ebay_price_usd'] = ebay_data['price']
                     res_obj['ebay_price_jpy'] = ebay_data['price'] * rate
-                    res_obj['fees'] = (ebay_data['price'] * rate * 0.1135)
+                    # 手数料率をDBから取得
+                    cur_fee_rate = FEE_RATES.get(res_obj.get('genre'), FEE_RATES["default"])
+                    res_obj['fees'] = (ebay_data['price'] * rate * cur_fee_rate)
 
                 try:
                     # メルカリ
-                    m_res = await search_mercari(page, new_kw)
+                    m_res = await search_mercari(page, new_kw, res_obj['genre'], is_manual=True)
                     res_obj['items'].extend(m_res)
                     # ヤフーフリマ
-                    y_res = await search_yahoo(page, new_kw)
+                    y_res = await search_yahoo(page, new_kw, res_obj['genre'], is_manual=True)
                     res_obj['items'].extend(y_res)
                     # ハードオフ
-                    h_res = await search_hardoff(page, new_kw)
+                    h_res = await search_hardoff(page, new_kw, res_obj['genre'], is_manual=True)
                     res_obj['items'].extend(h_res)
                     # ヤフオク履歴
                     y_history = await fetch_yahoo_auction_history(new_kw, browser)
@@ -1087,5 +1286,5 @@ if __name__ == '__main__':
     threading.Thread(target=lambda: app.run(port=5009, debug=False, use_reloader=False), daemon=True).start()
     time.sleep(1)
     webbrowser.open("http://127.0.0.1:5009")
-    asyncio.run(main_process())
+    # asyncio.run(main_process())  <-- 自動開始を停止
     while True: time.sleep(1)
