@@ -1,3 +1,7 @@
+# 🏆 eBay Research Edge (ERE) - Official Entry Point (V16.x)
+# [Role] Active Dashboard & Scraper
+# [Run] python generate_research_report.py
+
 import asyncio, os, re, requests, unicodedata, urllib.parse
 from datetime import datetime
 from playwright.async_api import async_playwright

@@ -1,3 +1,16 @@
+# eBay-Research-Edge
+
+## 🚀 Quick Start (Official Entry Point)
+現在の正式なエントリポイントは `generate_research_report.py` です。
+
+### 起動コマンド
+```bash
+python generate_research_report.py
+```
+起動後、ブラウザで `http://127.0.0.1:5009` にアクセスしてください。
+
+---
+
 # eBay Research Edge - 自動価格リサーチダッシュボード
 
 ## 概要

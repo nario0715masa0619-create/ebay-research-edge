@@ -1,5 +1,7 @@
 """
-eBay-Research-Edge - Main Application Entry Point
+[ARCHIVED] eBay-Research-Edge - Old Pipeline Entry Point
+This file is part of the old modular system (Phase 1-5) and is no longer used.
+The current official entry point is generate_research_report.py.
 """
 
 import logging

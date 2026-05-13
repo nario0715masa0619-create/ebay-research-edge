@@ -1,3 +1,7 @@
+# [ARCHIVED] eBay-Research-Edge - Early Prototype
+# This file is an old prototype and is no longer used.
+# The current official entry point is generate_research_report.py.
+
 import logging
 import sys
 from pathlib import Path
