@@ -25,6 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESEARCH_RESULTS = []
 IS_FINISHED = False
 IS_SEARCHING = False
+LAST_ERROR = None
 SEARCH_STATE_LOCK = threading.Lock()
 CURRENT_GENRE = "ポケモンカード"
 MAIN_PROCESS_THREAD = None
@@ -369,11 +370,10 @@ FEE_RATES = {
 }
 
 async def main_process(genre="ポケモンカード"):
-    global IS_FINISHED, RESEARCH_RESULTS, CURRENT_GENRE, IS_SEARCHING
-    # IS_SEARCHING = True  <-- /start-search側でセットするため削除
+    global IS_FINISHED, RESEARCH_RESULTS, CURRENT_GENRE, IS_SEARCHING, LAST_ERROR
+    # IS_SEARCHING = True は /start-search 側でセット済み
     try:
-        # CURRENT_GENRE = genre  <-- /start-search側でセットすることも可能だが、念のため残す
-        # IS_FINISHED = False    <-- /start-search側でセットするため削除
+        # IS_FINISHED = False も /start-search 側でセット済み
         RESEARCH_RESULTS = [] # 以前の結果をクリア
 
         # 手数料率の決定
@@ -436,7 +436,8 @@ async def main_process(genre="ポケモンカード"):
                             'items': [],
                             'keywords': kw,
                             'y_history': None,
-                            'searching': False
+                            'searching': False,
+                            'error': None
                         }
                         RESEARCH_RESULTS.append(res_obj)
 
@@ -462,6 +463,7 @@ async def main_process(genre="ポケモンカード"):
                         
                     except Exception as e:
                         print(f"  [ERROR] 商品スキップ ({idx}): {e}")
+                        res_obj['error'] = str(e)
                         continue
         finally:
             if browser:
@@ -471,6 +473,7 @@ async def main_process(genre="ポケモンカード"):
         import traceback
         print(f"[CRITICAL ERROR] main_process failed: {e}")
         traceback.print_exc()
+        LAST_ERROR = str(e)
     finally:
         with SEARCH_STATE_LOCK:
             IS_SEARCHING = False
@@ -737,7 +740,14 @@ def index():
                 }
                 
                 document.getElementById('main-actions').style.display = 'block';
-                badge.innerText = data.finished ? `COMPLETED (${data.genre})` : `RESEARCHING ${data.genre} (${data.results.length} items found)`;
+                
+                // システムエラー表示
+                if (data.last_error) {
+                    badge.innerHTML = `<span style="color:var(--danger); font-weight:bold;">⚠️ システムエラー: ${data.last_error}</span>`;
+                } else {
+                    badge.innerText = data.finished ? `COMPLETED (${data.genre})` : `RESEARCHING ${data.genre} (${data.results.length} items found)`;
+                }
+
                 if (data.finished) badge.classList.remove('pulse');
                 else badge.classList.add('pulse');
 
@@ -842,6 +852,7 @@ def index():
                                     </div>
                                 </div>
                                 <div class="ai-analysis" id="ai-${res.idx}">${currentDiv && currentDiv.querySelector('.ai-analysis') ? currentDiv.querySelector('.ai-analysis').innerHTML : 'アイテムを選択してAI判定を開始'}</div>
+                                ${res.error ? `<div style="margin-top:10px; padding:10px; background:rgba(239,68,68,0.1); border:1px solid var(--danger); border-radius:10px; color:var(--danger); font-size:12px;">❌ エラー: ${res.error}</div>` : ''}
                             </div>
                         </div>
                     `;
@@ -1177,6 +1188,7 @@ def get_data():
         'results': RESEARCH_RESULTS, 
         'finished': IS_FINISHED,
         'is_searching': IS_SEARCHING,
+        'last_error': LAST_ERROR,
         'searching_any': searching_count > 0,
         'genre': CURRENT_GENRE
     })
@@ -1196,6 +1208,7 @@ def start_search():
             # ロック内で状態を確保
             IS_SEARCHING = True
             IS_FINISHED = False
+            LAST_ERROR = None
             CURRENT_GENRE = genre
             
         threading.Thread(target=lambda: asyncio.run(main_process(genre)), daemon=True).start()
