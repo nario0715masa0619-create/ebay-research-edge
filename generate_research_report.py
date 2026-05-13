@@ -685,7 +685,7 @@ def index():
                 <label style="font-size:0.8rem; color:var(--text-dim); display:block; margin-bottom:5px;">または新規入力</label>
                 <input type="text" id="new-genre" placeholder="例: ワンピースカード" style="background:#1e293b; color:white; border:1px solid var(--accent); padding:10px; border-radius:10px; width:100%; outline:none;">
             </div>
-            <button onclick="startResearch()" style="background:var(--accent); color:white; border:none; padding:12px 30px; border-radius:15px; font-weight:700; cursor:pointer; box-shadow:0 10px 20px var(--accent-glow); margin-top:20px;">リサーチ開始</button>
+            <button id="start-btn" onclick="startResearch()" style="background:var(--accent); color:white; border:none; padding:12px 30px; border-radius:15px; font-weight:700; cursor:pointer; box-shadow:0 10px 20px var(--accent-glow); margin-top:20px;">リサーチ開始</button>
         </div>
 
         <div id="status-badge" style="margin-top:20px;">ジャンルを選択してリサーチを開始してください</div>
@@ -711,6 +711,22 @@ def index():
 
                 const container = document.getElementById('container');
                 
+                // 開始ボタンの制御
+                const startBtn = document.getElementById('start-btn');
+                if (startBtn) {
+                    if (data.is_searching) {
+                        startBtn.disabled = true;
+                        startBtn.innerText = '⌛ リサーチ実行中...';
+                        startBtn.style.opacity = '0.6';
+                        startBtn.style.cursor = 'not-allowed';
+                    } else {
+                        startBtn.disabled = false;
+                        startBtn.innerText = 'リサーチ開始';
+                        startBtn.style.opacity = '1';
+                        startBtn.style.cursor = 'pointer';
+                    }
+                }
+
                 const badge = document.getElementById('status-badge');
                 if (data.results.length === 0 && !data.finished && !data.searching_any) {
                     badge.innerText = 'ジャンルを選択してリサーチを開始してください';
@@ -1120,6 +1136,13 @@ def index():
             
             if (!confirm(`${genre} のリサーチを開始しますか？`)) return;
             
+            // 即座にボタンを無効化
+            const startBtn = document.getElementById('start-btn');
+            if (startBtn) {
+                startBtn.disabled = true;
+                startBtn.innerText = '⌛ 準備中...';
+            }
+
             saveGenreHistory(genre);
             
             try {
