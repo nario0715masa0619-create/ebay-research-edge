@@ -25,6 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESEARCH_RESULTS = []
 IS_FINISHED = False
 IS_SEARCHING = False
+SEARCH_STATE_LOCK = threading.Lock()
 CURRENT_GENRE = "ポケモンカード"
 MAIN_PROCESS_THREAD = None
 
@@ -369,10 +370,10 @@ FEE_RATES = {
 
 async def main_process(genre="ポケモンカード"):
     global IS_FINISHED, RESEARCH_RESULTS, CURRENT_GENRE, IS_SEARCHING
-    IS_SEARCHING = True
+    # IS_SEARCHING = True  <-- /start-search側でセットするため削除
     try:
-        CURRENT_GENRE = genre
-        IS_FINISHED = False
+        # CURRENT_GENRE = genre  <-- /start-search側でセットすることも可能だが、念のため残す
+        # IS_FINISHED = False    <-- /start-search側でセットするため削除
         RESEARCH_RESULTS = [] # 以前の結果をクリア
 
         # 手数料率の決定
@@ -471,8 +472,9 @@ async def main_process(genre="ポケモンカード"):
         print(f"[CRITICAL ERROR] main_process failed: {e}")
         traceback.print_exc()
     finally:
-        IS_SEARCHING = False
-        IS_FINISHED = True
+        with SEARCH_STATE_LOCK:
+            IS_SEARCHING = False
+            IS_FINISHED = True
         print(f"  [LOG] 全行程終了 (Genre: {genre})")
 
 app = Flask(__name__)
@@ -1151,6 +1153,7 @@ def get_data():
     return jsonify({
         'results': RESEARCH_RESULTS, 
         'finished': IS_FINISHED,
+        'is_searching': IS_SEARCHING,
         'searching_any': searching_count > 0,
         'genre': CURRENT_GENRE
     })
@@ -1163,8 +1166,14 @@ def start_search():
         genre = data.get('genre', 'ポケモンカード')
         
         # すでに実行中のスレッドがあるか確認
-        if IS_SEARCHING:
-            return jsonify({'success': False, 'error': 'リサーチが既に実行中です。完了するまでお待ちください。'})
+        with SEARCH_STATE_LOCK:
+            if IS_SEARCHING:
+                return jsonify({'success': False, 'error': 'リサーチが既に実行中です。完了するまでお待ちください。'})
+            
+            # ロック内で状態を確保
+            IS_SEARCHING = True
+            IS_FINISHED = False
+            CURRENT_GENRE = genre
             
         threading.Thread(target=lambda: asyncio.run(main_process(genre)), daemon=True).start()
         
