@@ -39,7 +39,7 @@ def parse_currency(value):
 
 def get_exchange_rate():
     try:
-        r = requests.get('https://api.exchangerate-api.com/v4/latest/USD', timeout=10)
+        r = requests.get('https://api.exchangerate-api.com/v4/latest/USD', timeout=config.API_REQUEST_TIMEOUT_SECONDS)
         return r.json()['rates']['JPY']
     except: return 157.50
 
@@ -47,7 +47,7 @@ def get_ebay_token():
     try:
         r = requests.post('https://api.ebay.com/identity/v1/oauth2/token', 
                           auth=(os.getenv('EBAY_REST_CLIENT_ID'), os.getenv('EBAY_REST_CLIENT_SECRET')), 
-                          data={'grant_type': 'client_credentials', 'scope': 'https://api.ebay.com/oauth/api_scope'}, timeout=10)
+                          data={'grant_type': 'client_credentials', 'scope': 'https://api.ebay.com/oauth/api_scope'}, timeout=config.API_REQUEST_TIMEOUT_SECONDS)
         return r.json().get('access_token')
     except: return None
 
@@ -69,13 +69,13 @@ async def fetch_yahoo_auction_history(search_query, browser):
         if isinstance(search_query, list):
             search_query = ' '.join(search_query)
         
-        new_page = await asyncio.wait_for(browser.new_page(), timeout=10)
+        new_page = await asyncio.wait_for(browser.new_page(), timeout=config.API_REQUEST_TIMEOUT_SECONDS)
         # より広範囲のクラス名で価格を取得
         encoded_query = urllib.parse.quote(search_query, safe='')
         url = f'https://auctions.yahoo.co.jp/closedsearch/closedsearch?p={encoded_query}&va={encoded_query}&b=1&n=50'
         
-        await asyncio.wait_for(new_page.goto(url, wait_until='domcontentloaded'), timeout=15)
-        await new_page.wait_for_timeout(1500)
+        await asyncio.wait_for(new_page.goto(url, wait_until='domcontentloaded'), timeout=config.API_REQUEST_TIMEOUT_SECONDS + 5)
+        await new_page.wait_for_timeout(config.BROWSER_SHORT_WAIT_MS)
         
         # fontWeightBold を含むクラスから数値を抽出
         prices = await new_page.evaluate("""() => {
@@ -115,7 +115,7 @@ async def get_ebay_item_info(token, title, item_id=None):
         if item_id:
             full_id = f"v1|{item_id}|0" if str(item_id).isdigit() else str(item_id)
             url = f"https://api.ebay.com/buy/browse/v1/item/{full_id}"
-            r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=10)
+            r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=config.API_REQUEST_TIMEOUT_SECONDS)
             if r.status_code == 200:
                 data = r.json()
                 price_data = data.get('price', {})
@@ -129,7 +129,7 @@ async def get_ebay_item_info(token, title, item_id=None):
 
         # 2. IDがない、または直接取得に失敗した場合は検索
         url = f"https://api.ebay.com/buy/browse/v1/item_summary/search?q={urllib.parse.quote(title)}&limit=1"
-        r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=10)
+        r = requests.get(url, headers={'Authorization': f'Bearer {token}'}, timeout=config.API_REQUEST_TIMEOUT_SECONDS)
         if r.status_code == 200:
             data = r.json()
             if 'itemSummaries' in data and data['itemSummaries']:
@@ -235,11 +235,11 @@ async def search_mercari(page, kw, genre="ポケモンカード", is_manual=Fals
     
     try:
         url = f'https://jp.mercari.com/search?keyword={urllib.parse.quote(query, safe="")}&status=on_sale'
-        await page.goto(url, timeout=20000)
+        await page.goto(url, timeout=config.BROWSER_GOTO_TIMEOUT_MS)
         
         # 読み込み待ちを強化
         try:
-            await page.wait_for_selector('a[href^="/item/m"]', timeout=8000)
+            await page.wait_for_selector('a[href^="/item/m"]', timeout=config.BROWSER_SELECTOR_TIMEOUT_MS)
         except:
             pass
             
@@ -283,9 +283,9 @@ async def search_yahoo(page, kw, genre="ポケモンカード", is_manual=False)
     query = ' '.join(unique_words[:6])
     try:
         url = f"https://paypayfleamarket.yahoo.co.jp/search/{urllib.parse.quote(query, safe='')}?open=1"
-        await page.goto(url, timeout=30000)
+        await page.goto(url, timeout=config.BROWSER_GOTO_TIMEOUT_MS)
         try:
-            await page.wait_for_selector('a[href*="/item/"]', timeout=10000)
+            await page.wait_for_selector('a[href*="/item/"]', timeout=config.BROWSER_SELECTOR_TIMEOUT_MS)
         except: pass
         items = await page.locator('a[href*="/item/"]').all()
         res = []
@@ -341,8 +341,8 @@ async def search_hardoff(page, kw, genre="ポケモンカード", is_manual=Fals
     
     try:
         url = f'https://netmall.hardoff.co.jp/search/?q={urllib.parse.quote(query)}'
-        await page.goto(url, timeout=20000)
-        await page.wait_for_timeout(1500)
+        await page.goto(url, timeout=config.BROWSER_GOTO_TIMEOUT_MS)
+        await page.wait_for_timeout(config.BROWSER_SHORT_WAIT_MS)
         items = await page.locator('div.item, .product-card, div:has(> a[href*="/product/"])').all()
         res = []
         for it in items[:5]:
