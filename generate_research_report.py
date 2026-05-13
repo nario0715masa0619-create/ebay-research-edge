@@ -221,12 +221,20 @@ async def search_mercari(page, kw, genre="ポケモンカード", is_manual=Fals
     unique_words = []
     for w in words:
         if w not in unique_words: unique_words.append(w)
-    query = ' '.join(unique_words[:6])
+    
+    # クエリが長すぎるとヒットしないため、最大4単語に制限
+    query = ' '.join(unique_words[:4])
     
     try:
         url = f'https://jp.mercari.com/search?keyword={urllib.parse.quote(query, safe="")}&status=on_sale'
         await page.goto(url, timeout=20000)
-        await page.wait_for_timeout(1500)
+        
+        # 読み込み待ちを強化
+        try:
+            await page.wait_for_selector('a[href^="/item/m"]', timeout=8000)
+        except:
+            pass
+            
         items = await page.locator('a[href^="/item/m"]').all()
         res = []
         for it in items[:15]:
@@ -244,8 +252,11 @@ async def search_mercari(page, kw, genre="ポケモンカード", is_manual=Fals
                         html: el.innerHTML
                     }
                 }""")
-                exclude_kws = ["入札", "オークション", "現在", "残り", "〜", "盗難防止", "観賞用", "展示用", "レプリカ"]
-                if any(x in d.get('price','') or x in d.get('title','') or x in d.get('html','') for x in exclude_kws): continue
+                
+                # 「〜」は装飾でよく使われるため、除外リストから削除。またメルカリにオークション系用語は不要
+                exclude_kws = ["盗難防止", "観賞用", "展示用", "レプリカ"]
+                if any(x in d.get('title','') or x in d.get('html','') for x in exclude_kws): continue
+                
                 m = re.search(r'¥\s*([\d,]+)', d['price'])
                 if m:
                     price = int(m.group(1).replace(',',''))
@@ -767,14 +778,25 @@ def index():
                     // 手入力されたキーワードを優先的に保持
                     if (!window.manualKeywords) window.manualKeywords = {};
                     const currentDiv = document.getElementById('prod-' + res.idx);
+                    
+                    // サブコンテナがない場合は作成（初期化）
+                    if (currentDiv && !currentDiv.querySelector('.info-part')) {
+                        currentDiv.innerHTML = `
+                            <div class="info-part"></div>
+                            <div class="market-part"></div>
+                            <div class="footer-part"></div>
+                        `;
+                    }
+
                     const kwInput = currentDiv ? currentDiv.querySelector('.kw-input') : null;
                     const isKwFocused = kwInput && document.activeElement === kwInput;
                     
-                    // 現在の値を保持（入力中ならその値、そうでなければ記憶している値、それもなければサーバー値）
+                    // 現在の値を保持
                     if (isKwFocused) window.manualKeywords[res.idx] = kwInput.value;
                     const currentKwValue = window.manualKeywords[res.idx] !== undefined ? window.manualKeywords[res.idx] : (res.keywords ? res.keywords.join(' ') : '');
 
-                    const content = `
+                    // 1. Info Part (タイトル、入力欄、AI判定)
+                    const infoHtml = `
                         <div class="main-info">
                             <img src="${res.ebay_img}" class="ebay-img">
                             <div class="product-details">
@@ -790,14 +812,20 @@ def index():
                                         <button onclick="researchItem(${res.idx})" style="background:var(--accent); color:white; border:none; padding:5px 15px; border-radius:10px; font-size:12px; cursor:pointer; font-weight:600;">再検索</button>
                                     </div>
                                 </div>
-                                <div class="ai-analysis" id="ai-${res.idx}">アイテムを選択してAI判定を開始</div>
+                                <div class="ai-analysis" id="ai-${res.idx}">${currentDiv && currentDiv.querySelector('.ai-analysis') ? currentDiv.querySelector('.ai-analysis').innerHTML : 'アイテムを選択してAI判定を開始'}</div>
                             </div>
                         </div>
+                    `;
 
+                    // 2. Market Part (検索結果)
+                    const marketHtmlWrap = `
                         <div class="market-grid">
                             ${marketHtml}
                         </div>
+                    `;
 
+                    // 3. Footer Part (計算機)
+                    const footerHtml = `
                         <div class="calc-footer">
                             <div class="stats-grid" style="margin:0; flex:1; display:flex; align-items:center; justify-content:space-between; gap:10px;">
                                 <div class="stat-box">
@@ -815,7 +843,7 @@ def index():
                                     <div style="display:flex; align-items:center; gap:2px; color:var(--accent);">
                                         <span>¥</span>
                                         <input type="number" class="purchase-input-${res.idx}" 
-                                               value="${res.selected_price || 0}" 
+                                               value="${res.selected_price || (currentDiv && currentDiv.querySelector('.purchase-input-' + res.idx) ? currentDiv.querySelector('.purchase-input-' + res.idx).value : 0)}" 
                                                oninput="recalc(${res.idx}, ${ebayPrice}, ${Math.round((res.fees || 0) + (res.shipping || 0))})"
                                                style="background:transparent; border:none; border-bottom:1px solid var(--accent); color:var(--accent); font-size:18px; font-weight:bold; width:80px; text-align:center; outline:none;">
                                     </div>
@@ -833,40 +861,37 @@ def index():
                         </div>
                     `;
 
-                    if (div.dataset.content !== content) {
-                        const wasFocused = document.activeElement && document.activeElement.closest('#' + div.id);
-                        const selectedIdx = div.querySelector('.item-card.selected') ? Array.from(div.querySelectorAll('.item-card')).indexOf(div.querySelector('.item-card.selected')) : -1;
-                        
-                        div.innerHTML = content;
-                        div.dataset.content = content;
+                    // 個別に更新 (フォーカスがある場合はスキップ)
+                    if (div) {
+                        const infoPart = div.querySelector('.info-part');
+                        const marketPart = div.querySelector('.market-part');
+                        const footerPart = div.querySelector('.footer-part');
 
-                        // 選択状態を復元
-                        if (selectedIdx !== -1) {
-                            const newCards = div.querySelectorAll('.item-card');
-                            if (newCards[selectedIdx]) newCards[selectedIdx].classList.add('selected');
-                        } else {
-                            // 初回のみ自動クリック
-                            const first = div.querySelector('.item-card');
-                            if (first) first.click();
+                        if (infoPart && infoPart.innerHTML !== infoHtml && !infoPart.contains(document.activeElement)) {
+                            infoPart.innerHTML = infoHtml;
+                        }
+                        if (marketPart && marketPart.innerHTML !== marketHtmlWrap && !marketPart.contains(document.activeElement)) {
+                            const selectedIdx = marketPart.querySelector('.item-card.selected') ? Array.from(marketPart.querySelectorAll('.item-card')).indexOf(marketPart.querySelector('.item-card.selected')) : -1;
+                            marketPart.innerHTML = marketHtmlWrap;
+                            if (selectedIdx !== -1) {
+                                const newCards = marketPart.querySelectorAll('.item-card');
+                                if (newCards[selectedIdx]) newCards[selectedIdx].classList.add('selected');
+                            } else if (!res.searching) {
+                                const first = marketPart.querySelector('.item-card');
+                                if (first) first.click();
+                            }
+                        }
+                        if (footerPart && footerPart.innerHTML !== footerHtml && !footerPart.contains(document.activeElement)) {
+                            footerPart.innerHTML = footerHtml;
+                            recalc(res.idx, ebayPrice, Math.round((res.fees || 0) + (res.shipping || 0)));
                         }
                     }
                 });
 
-                // フォーカスを復元
-                if (activeId) {
-                    const el = document.getElementById(activeId);
-                    if (el) {
-                        el.focus();
-                        if (selectionStart !== null && selectionEnd !== null) {
-                            try {
-                                el.setSelectionRange(selectionStart, selectionEnd);
-                            } catch(e) {}
-                        }
-                    }
-                }
-
-                // 最初の10件が終わっても、個別の再検索があり得るので更新を継続する
+                // フォーカス復元ロジックは上記で対応済みのため削除
+                // 最初の10件が終わっても更新を継続
                 setTimeout(update, 3000);
+
             } catch (e) {
                 console.error("Update error:", e);
                 setTimeout(update, 5000);
@@ -884,7 +909,7 @@ def index():
             recalc(idx, e, f + s);
 
             const aibox = document.getElementById('ai-' + idx);
-            aibox.innerHTML = '<span class="pulse" style="color:var(--accent);">【AI画像判定】 解析中...</span>';
+            if (aibox) aibox.innerHTML = '<span class="pulse" style="color:var(--accent);">【AI画像判定】 解析中...</span>';
 
             try {
                 const dataKey = el.dataset.key;
@@ -902,18 +927,24 @@ def index():
                     })
                 });
                 const d = await r.json();
+                
+                // 【重要】UI更新(update)で要素が置換されている可能性があるため、ここで最新の要素を再取得する
+                const currentAiBox = document.getElementById('ai-' + idx);
+                if (!currentAiBox) return;
+
                 if (d.success) {
                     const score = d.result.match_score;
                     let color = 'var(--danger)';
                     if (score >= 80) color = 'var(--success)';
                     else if (score >= 50) color = 'var(--warning)';
 
-                    aibox.innerHTML = `<b style="color:${color}">【AI画像判定】 一致度: ${score}%</b><br>${d.result.reason}`;
+                    currentAiBox.innerHTML = `<b style="color:${color}">【AI画像判定】 一致度: ${score}%</b><br>${d.result.reason}`;
                 } else {
-                    aibox.innerText = '判定エラー';
+                    currentAiBox.innerText = '判定エラー';
                 }
             } catch (e) {
-                aibox.innerText = '通信エラー';
+                const currentAiBox = document.getElementById('ai-' + idx);
+                if (currentAiBox) currentAiBox.innerText = '通信エラー';
             }
         }
 
