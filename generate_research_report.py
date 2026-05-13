@@ -24,6 +24,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 RESEARCH_RESULTS = []
 IS_FINISHED = False
+IS_SEARCHING = False
 CURRENT_GENRE = "ポケモンカード"
 MAIN_PROCESS_THREAD = None
 
@@ -367,106 +368,112 @@ FEE_RATES = {
 }
 
 async def main_process(genre="ポケモンカード"):
-    global IS_FINISHED, RESEARCH_RESULTS, CURRENT_GENRE
-    CURRENT_GENRE = genre
-    IS_FINISHED = False
-    RESEARCH_RESULTS = [] # 以前の結果をクリア
+    global IS_FINISHED, RESEARCH_RESULTS, CURRENT_GENRE, IS_SEARCHING
+    IS_SEARCHING = True
+    try:
+        CURRENT_GENRE = genre
+        IS_FINISHED = False
+        RESEARCH_RESULTS = [] # 以前の結果をクリア
 
-    # 手数料率の決定
-    fee_rate = FEE_RATES.get(genre, FEE_RATES["default"])
-    print(f"  [LOG] ジャンル: {genre}, 適用手数料率: {fee_rate*100}%")
+        # 手数料率の決定
+        fee_rate = FEE_RATES.get(genre, FEE_RATES["default"])
+        print(f"  [LOG] ジャンル: {genre}, 適用手数料率: {fee_rate*100}%")
 
-    rate = get_exchange_rate()
-    ebay_token = get_ebay_token()
-    sheet_id = os.getenv('GOOGLE_SHEETS_ID')
-    df = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0")
+        rate = get_exchange_rate()
+        ebay_token = get_ebay_token()
+        sheet_id = os.getenv('GOOGLE_SHEETS_ID')
+        df = pd.read_csv(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0")
 
-    async with async_playwright() as p:
-        print("  [DEBUG] ブラウザを起動中...")
-        browser = await p.chromium.launch(headless=False)
-        print("  [DEBUG] ブラウザ起動完了")
-        context = await browser.new_context()
-        page = await context.new_page()
-        print(f"  [DEBUG] Spreadsheet Columns: {df.columns.tolist()}")
-        id_col = next((c for c in df.columns if c.lower() in ['ebay_item_id', 'item_id', 'ebay_id', 'itemid', 'id', '商品id']), None)
-        title_col = next((c for c in df.columns if c.lower() in ['ebay_title', 'title', '商品名']), 'ebay_title')
-        price_col = next((c for c in df.columns if c.lower() in ['avg_price_usd', 'price', 'ebay価格(usd)']), 'avg_price_usd')
-        status_col = next((c for c in df.columns if c.lower() in ['status', 'ステータス', 'state']), None)
+        browser = None
+        try:
+            async with async_playwright() as p:
+                print("  [DEBUG] ブラウザを起動中...")
+                browser = await p.chromium.launch(headless=False)
+                print("  [DEBUG] ブラウザ起動完了")
+                context = await browser.new_context()
+                page = await context.new_page()
+                print(f"  [DEBUG] Spreadsheet Columns: {df.columns.tolist()}")
+                id_col = next((c for c in df.columns if c.lower() in ['ebay_item_id', 'item_id', 'ebay_id', 'itemid', 'id', '商品id']), None)
+                title_col = next((c for c in df.columns if c.lower() in ['ebay_title', 'title', '商品名']), 'ebay_title')
+                price_col = next((c for c in df.columns if c.lower() in ['avg_price_usd', 'price', 'ebay価格(usd)']), 'avg_price_usd')
+                status_col = next((c for c in df.columns if c.lower() in ['status', 'ステータス', 'state']), None)
 
-        for idx, row in df.iterrows():
-            if idx >= 10: break
-            try:
-                title = str(row.get(title_col, 'Unknown'))
-                
-                item_id = clean_ebay_id(row.get(id_col))
-                
-                # スプシからの予備価格とステータス
-                usd_sheet = parse_currency(row.get(price_col, 0))
-                status_val = str(row.get(status_col, '')) if status_col else ''
-                
-                # AIを使って日本語キーワードを生成
-                kw = extract_keywords_ai(title, genre)
-                print(f"[SEARCH] [{idx+1}/10] {title} (ID: {item_id}, Status: {status_val})")
-                
-                print(f"  [LOG] eBay情報取得中... (ID: {item_id})")
-                ebay_data = await get_ebay_item_info(ebay_token, title, item_id)
-                print(f"  [LOG] eBay情報取得完了: {ebay_data['title'][:30]}...")
-                
-                # eBayからの最新データがあればそれを優先、なければスプシ価格を使用
-                usd = ebay_data.get('price') if ebay_data.get('price') else usd_sheet
-                # IDの決定: スプシから取得したIDがあればそれを優先(取得したままの値)
-                final_id = item_id if item_id else (ebay_data.get('id') or '')
-                
-                # [NEW] リアルタイム更新のために空のオブジェクトを先に追加
-                res_obj = {
-                    'idx': idx,
-                    'ebay_title': ebay_data['title'],
-                    'ebay_img': ebay_data['img'],
-                    'ebay_url': ebay_data['url'],
-                    'ebay_item_id': final_id,
-                    'genre': genre,
-                    'status': status_val,
-                    'ebay_price_usd': usd,
-                    'ebay_price_jpy': usd * rate,
-                    'fees': (usd * rate * fee_rate),
-                    'shipping': 1500,
-                    'items': [],
-                    'keywords': kw,
-                    'y_history': None,
-                    'searching': False
-                }
-                RESEARCH_RESULTS.append(res_obj)
+                for idx, row in df.iterrows():
+                    if idx >= 10: break
+                    try:
+                        title = str(row.get(title_col, 'Unknown'))
+                        item_id = clean_ebay_id(row.get(id_col))
+                        
+                        # スプシからの予備価格とステータス
+                        usd_sheet = parse_currency(row.get(price_col, 0))
+                        status_val = str(row.get(status_col, '')) if status_col else ''
+                        
+                        # AIを使って日本語キーワードを生成
+                        kw = extract_keywords_ai(title, genre)
+                        print(f"[SEARCH] [{idx+1}/10] {title} (ID: {item_id}, Status: {status_val})")
+                        
+                        print(f"  [LOG] eBay情報取得中... (ID: {item_id})")
+                        ebay_data = await get_ebay_item_info(ebay_token, title, item_id)
+                        print(f"  [LOG] eBay情報取得完了: {ebay_data['title'][:30]}...")
+                        
+                        # eBayからの最新データがあればそれを優先、なければスプシ価格を使用
+                        usd = ebay_data.get('price') if ebay_data.get('price') else usd_sheet
+                        final_id = item_id if item_id else (ebay_data.get('id') or '')
+                        
+                        res_obj = {
+                            'idx': idx,
+                            'ebay_title': ebay_data['title'],
+                            'ebay_img': ebay_data['img'],
+                            'ebay_url': ebay_data['url'],
+                            'ebay_item_id': final_id,
+                            'genre': genre,
+                            'status': status_val,
+                            'ebay_price_usd': usd,
+                            'ebay_price_jpy': usd * rate,
+                            'fees': (usd * rate * fee_rate),
+                            'shipping': 1500,
+                            'items': [],
+                            'keywords': kw,
+                            'y_history': None,
+                            'searching': False
+                        }
+                        RESEARCH_RESULTS.append(res_obj)
 
-                # 1. メルカリ
-                print(f"  [LOG] メルカリ検索中... (ジャンル: {genre})")
-                m_res = await search_mercari(page, kw, genre)
-                res_obj['items'].extend(m_res)
-                print(f"  [LOG] メルカリ完了: {len(m_res)}件ヒット")
-                
-                # 2. ヤフーフリマ
-                print(f"  [LOG] ヤフーフリマ検索中...")
-                y_res = await search_yahoo(page, kw, genre)
-                res_obj['items'].extend(y_res)
-                print(f"  [LOG] ヤフーフリマ完了: {len(y_res)}件ヒット")
-                
-                # 3. ハードオフ
-                print(f"  [LOG] ハードオフ検索中...")
-                h_res = await search_hardoff(page, kw, genre)
-                res_obj['items'].extend(h_res)
-                print(f"  [LOG] ハードオフ完了: {len(h_res)}件ヒット")
-                
-                # 4. ヤフオク履歴
-                print(f"  [LOG] ヤフオク履歴取得中...")
-                y_history = await fetch_yahoo_auction_history(kw, browser)
-                res_obj['y_history'] = y_history
-                print(f"  [LOG] ヤフオク履歴完了")
-                
-            except Exception as e:
-                import traceback
-                print(f"[ERROR] Error: {e}")
-                traceback.print_exc()
-        await browser.close()
-    IS_FINISHED = True
+                        # 1. メルカリ
+                        print(f"  [LOG] メルカリ検索中... (ジャンル: {genre})")
+                        m_res = await search_mercari(page, kw, genre)
+                        res_obj['items'].extend(m_res)
+                        
+                        # 2. ヤフーフリマ
+                        print(f"  [LOG] ヤフーフリマ検索中...")
+                        y_res = await search_yahoo(page, kw, genre)
+                        res_obj['items'].extend(y_res)
+                        
+                        # 3. ハードオフ
+                        print(f"  [LOG] ハードオフ検索中...")
+                        h_res = await search_hardoff(page, kw, genre)
+                        res_obj['items'].extend(h_res)
+                        
+                        # 4. ヤフオク履歴
+                        print(f"  [LOG] ヤフオク履歴取得中...")
+                        y_history = await fetch_yahoo_auction_history(kw, browser)
+                        res_obj['y_history'] = y_history
+                        
+                    except Exception as e:
+                        print(f"  [ERROR] 商品スキップ ({idx}): {e}")
+                        continue
+        finally:
+            if browser:
+                await browser.close()
+                print("  [DEBUG] ブラウザを正常に終了しました。")
+    except Exception as e:
+        import traceback
+        print(f"[CRITICAL ERROR] main_process failed: {e}")
+        traceback.print_exc()
+    finally:
+        IS_SEARCHING = False
+        IS_FINISHED = True
+        print(f"  [LOG] 全行程終了 (Genre: {genre})")
 
 app = Flask(__name__)
 CORS(app)
@@ -1155,9 +1162,10 @@ def start_search():
         data = request.json
         genre = data.get('genre', 'ポケモンカード')
         
-        # すでに実行中のスレッドがあるか確認（簡易的）
-        # 本来は実行中のプロセスを停止させるなどの処理が必要だが、
-        # 今回は新規スレッドで開始させる
+        # すでに実行中のスレッドがあるか確認
+        if IS_SEARCHING:
+            return jsonify({'success': False, 'error': 'リサーチが既に実行中です。完了するまでお待ちください。'})
+            
         threading.Thread(target=lambda: asyncio.run(main_process(genre)), daemon=True).start()
         
         return jsonify({'success': True, 'genre': genre})
