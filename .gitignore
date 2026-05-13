@@ -73,3 +73,5 @@ htmlcov/
 *.backup_*
 generate_research_report.py.bak*
 generate_research_report.py.backup*
+
+.env.example
