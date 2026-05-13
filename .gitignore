@@ -46,10 +46,14 @@ venv.bak/
 # Data directories
 data/raw/
 data/processed/
+data/reports/*.html
 
 # Logs
 logs/
 *.log
+debug_output.txt
+error_trace.txt
+full_output.txt
 
 # Testing
 .pytest_cache/
@@ -60,3 +64,12 @@ htmlcov/
 *.tmp
 *.temp
 .env
+
+# Temporary and Backup files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.backup_*
+generate_research_report.py.bak*
+generate_research_report.py.backup*
