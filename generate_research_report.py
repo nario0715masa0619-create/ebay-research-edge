@@ -14,6 +14,7 @@ import threading
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from openai import OpenAI
+import config_runtime as config
 
 # 🏆 V15.1: カタログページ完全排除版 (No Catalog Hub)
 # ヤフーフリマの「製品カタログ(/product/)」を排除し、個別の出品物(/item/)のみを対象に。
@@ -354,20 +355,15 @@ async def search_hardoff(page, kw, genre="ポケモンカード", is_manual=Fals
                 }""")
                 if data['href']:
                     price = int(data['price'].replace(',',''))
-                    exclude_kws = ["盗難防止", "観賞用", "展示用", "レプリカ"]
+                    exclude_kws = config.EXCLUDED_KEYWORDS
                     if price >= 100 and not any(x in data['title'] for x in exclude_kws):
                         res.append({'price':price, 'title':data['title'], 'url':data['href'], 'image':data['img'], 'site':'ハードオフ'})
             except: continue
         return res
     except: return []
 
-# ジャンル別eBay手数料率（DB）
-FEE_RATES = {
-    "ポケモンカード": 0.1135, # 旧設定
-    "フィギュア": 0.127,      # ユーザー指定: 12.7%
-    "ゲーム": 0.127,
-    "default": 0.15            # 不明なジャンルのための安全マージン
-}
+# 手数料率は config_runtime.py で定義
+FEE_RATES = config.FEE_RATES
 
 async def main_process(genre="ポケモンカード"):
     global IS_FINISHED, RESEARCH_RESULTS, CURRENT_GENRE, IS_SEARCHING, LAST_ERROR
@@ -389,7 +385,7 @@ async def main_process(genre="ポケモンカード"):
         try:
             async with async_playwright() as p:
                 print("  [DEBUG] ブラウザを起動中...")
-                browser = await p.chromium.launch(headless=False)
+                browser = await p.chromium.launch(headless=False, timeout=config.BROWSER_TIMEOUT_MS)
                 print("  [DEBUG] ブラウザ起動完了")
                 context = await browser.new_context()
                 page = await context.new_page()
@@ -400,7 +396,7 @@ async def main_process(genre="ポケモンカード"):
                 status_col = next((c for c in df.columns if c.lower() in ['status', 'ステータス', 'state']), None)
 
                 for idx, row in df.iterrows():
-                    if idx >= 10: break
+                    if idx >= config.MAX_RESEARCH_ITEMS: break
                     try:
                         title = str(row.get(title_col, 'Unknown'))
                         item_id = clean_ebay_id(row.get(id_col))
@@ -432,7 +428,7 @@ async def main_process(genre="ポケモンカード"):
                             'ebay_price_usd': usd,
                             'ebay_price_jpy': usd * rate,
                             'fees': (usd * rate * fee_rate),
-                            'shipping': 1500,
+                            'shipping': config.DEFAULT_SHIPPING_COST_JPY,
                             'items': [],
                             'keywords': kw,
                             'y_history': None,
@@ -485,7 +481,7 @@ CORS(app)
 
 @app.route('/')
 def index():
-    return """<!DOCTYPE html>
+    html = """<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
@@ -735,7 +731,7 @@ def index():
                     badge.innerText = 'ジャンルを選択してリサーチを開始してください';
                     badge.className = '';
                     document.getElementById('main-actions').style.display = 'none';
-                    setTimeout(update, 3000); // ここで更新を継続させる
+                    setTimeout(update, POLLING_INTERVAL); // ここで更新を継続させる
                     return;
                 }
                 
@@ -930,7 +926,7 @@ def index():
 
                 // フォーカス復元ロジックは上記で対応済みのため削除
                 // 最初の10件が終わっても更新を継続
-                setTimeout(update, 3000);
+                setTimeout(update, POLLING_INTERVAL);
 
             } catch (e) {
                 console.error("Update error:", e);
@@ -1179,6 +1175,7 @@ def index():
     </script>
 </body>
 </html>"""
+    return html.replace("POLLING_INTERVAL", str(config.UI_POLLING_INTERVAL_MS))
 
 @app.route('/data')
 def get_data():
@@ -1288,7 +1285,7 @@ def get_item_description(url):
     try:
         # シンプルなリクエストで説明文の抽出を試みる
         # (JavaScriptが必要な場合はさらに工夫が必要ですが、まずはメタタグや構造から試行)
-        r = requests.get(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+        r = requests.get(url, timeout=config.REQUEST_TIMEOUT_SECONDS, headers={'User-Agent': 'Mozilla/5.0'})
         if r.status_code == 200:
             # メルカリやヤフオクの構造に合わせて、説明文らしき場所を正規表現で探す
             # メルカリ: "description":"..."  ヤフオク: <div class="ProductExplanation__commentText">
@@ -1364,15 +1361,15 @@ def save_to_sheet():
             return jsonify({'success': False, 'error': 'GAS_WEBAPP_URL not set in .env'})
         
         data = request.json # List of items
-        r = requests.post(gas_url, json=data, timeout=15)
+        r = requests.post(gas_url, json=data, timeout=config.REQUEST_TIMEOUT_SECONDS)
         print(f"  [GAS] Status: {r.status_code}, Response: {r.text}")
         return jsonify(r.json())
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    threading.Thread(target=lambda: app.run(port=5009, debug=False, use_reloader=False), daemon=True).start()
+    threading.Thread(target=lambda: app.run(port=config.SERVER_PORT, debug=False, use_reloader=False), daemon=True).start()
     time.sleep(1)
-    webbrowser.open("http://127.0.0.1:5009")
+    webbrowser.open(f"http://127.0.0.1:{config.SERVER_PORT}")
     # asyncio.run(main_process())  <-- 自動開始を停止
     while True: time.sleep(1)
